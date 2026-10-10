@@ -7,7 +7,7 @@ const MODEL = {
   url: 'https://huggingface.co/Vontra/detectra-v1/resolve/d8709d3c39aa69ab862748badce0d4a06e90bf4c/model.onnx',
   sha256: '1414b9aafaa01a644ed706224973f09b53a1388282104409862df9893b1b962b',
 };
-const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false };
+const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true };
 let settings = { ...DEFAULTS }, win = null, tray = null, gameReason = null, gameClearSince = 0, gameWatcher = null;
 let status = { model: 'starting', engine: null, flagged: 0, tracked: 0, fps: 0, error: null };
 
@@ -83,6 +83,7 @@ function buildMenu() {
     { label: 'Sensitivity', submenu: radio('sensitivity', [['sensitive', 'Sensitive (flags at 50%)'], ['balanced', 'Balanced (65%)'], ['strict', 'Strict (80%)']]) },
     { label: 'Check videos', type: 'checkbox', checked: settings.video, click: () => setSetting('video', !settings.video) },
     { label: 'Turn off during games', type: 'checkbox', checked: settings.gameGuard, click: () => setSetting('gameGuard', !settings.gameGuard) },
+    { label: 'Read labels and watermarks', type: 'checkbox', checked: settings.readText, click: () => setSetting('readText', !settings.readText) },
     { label: 'Show scores on every picture', type: 'checkbox', checked: settings.showScores, click: () => setSetting('showScores', !settings.showScores) },
     { type: 'separator' },
     { label: 'Open log folder', click: () => shell.openPath(app.getPath('userData')) },

@@ -7,3 +7,4 @@ overlay/app/engine-worker.js
 overlay/app/ort-wasm-simd-threaded.jsep.mjs
 overlay/test/frames/
 *.zip
+overlay/app/tesseract/

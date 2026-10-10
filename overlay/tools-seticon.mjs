@@ -11,7 +11,7 @@ ResEdit.Resource.IconGroupEntry.replaceIconsForResource(res.entries, groups[0].i
 const vi = ResEdit.Resource.VersionInfo.fromEntries(res.entries)[0];
 const lang = vi.getAllLanguagesForStringValues()[0];
 vi.setStringValues(lang, { FileDescription: 'AI Slop Overlay', ProductName: 'AI Slop Overlay', InternalName: 'AI Slop Overlay', OriginalFilename: 'AI Slop Overlay.exe', CompanyName: '', LegalCopyright: '' });
-vi.setFileVersion(0, 8, 0, 0, lang.lang); vi.setProductVersion(0, 8, 0, 0, lang.lang);
+vi.setFileVersion(0, 9, 0, 0, lang.lang); vi.setProductVersion(0, 9, 0, 0, lang.lang);
 vi.outputToResourceEntries(res.entries);
 res.outputResource(exe);
 writeFileSync(exePath, Buffer.from(exe.generate()));

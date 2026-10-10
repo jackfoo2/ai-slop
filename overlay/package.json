@@ -1,4 +1,1 @@
-{ "name": "ai-slop-overlay-build", "private": true, "type": "module",
-  "scripts": { "build": "sh build-windows.sh" },
-  "dependencies": { "onnxruntime-web": "1.21.0" },
-  "devDependencies": { "esbuild": "0.25.0", "pngjs": "^7.0.0", "resedit": "^2.0.0", "pe-library": "^1.0.0" } }
+{"name":"ai-slop-overlay-build","private":true,"type":"module","scripts":{"build":"sh build-windows.sh"},"dependencies":{"@tesseract.js-data/eng":"^1.0.0","onnxruntime-web":"1.21.0","tesseract.js":"^7.0.0"},"devDependencies":{"esbuild":"0.25.0","pe-library":"^1.0.0","pngjs":"^7.0.0","resedit":"^2.0.0"}}

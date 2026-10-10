@@ -92,3 +92,15 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
   feed and folder tests are unchanged.
 - Decided against "unnatural plain background" as an AI signal: real product photos, stock and clipart have
   it too.
+
+## v0.9: reading labels and watermarks (offline OCR, Tesseract.js, Apache-2.0)
+- Each picture, once it sits still, gets read: top and bottom strips inside it (watermarks) and the area
+  around it, stopping at neighboring pictures (name row, caption, strip below: site labels and hashtags).
+- Watermark phrases and tool names (short names only as whole words inside the picture); label phrases and
+  AI hashtags around it; forgiving of misread letters; ambiguous words (gemini, runway) left out.
+- A hit blurs regardless of the model score (watermark counts as 97%, label 90%); the tag shows the reason.
+- Test: six posts with dark "real-looking" pictures; the four with "AI info", #aiart, "Imagined with AI" and
+  "KLING AI" blurred, the two normal posts left alone. An early version read the neighbor post's watermark
+  from the area above a picture; fixed by stopping at neighboring pictures.
+- Speed: about 1.2 s per text area on the test machine (about 5 s per picture); runs one picture at a time in
+  the background, so it never delays the detector's blur.
