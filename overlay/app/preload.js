@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('slop', {
   model: () => ipcRenderer.invoke('model'),
   wasm: () => ipcRenderer.invoke('wasm'),
   settings: () => ipcRenderer.invoke('settings'),
+  wallpaper: () => ipcRenderer.invoke('wallpaper'),
   display: () => ipcRenderer.invoke('display'),
   onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
   clickable: (on) => ipcRenderer.send('clickable', on),

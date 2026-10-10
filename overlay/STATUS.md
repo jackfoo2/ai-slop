@@ -104,3 +104,27 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
   from the area above a picture; fixed by stopping at neighboring pictures.
 - Speed: about 1.2 s per text area on the test machine (about 5 s per picture); runs one picture at a time in
   the background, so it never delays the detector's blur.
+
+## v0.10 (Jack: his AI-made desktop wallpaper got blurred)
+- Asks Windows for the wallpaper image (TranscodedWallpaper) and its fit (fill, fit, stretch, center, tile,
+  span), draws it the way Windows lays it out, and treats screen pixels that match it as background when
+  looking for pictures. The wallpaper never becomes a "picture", however many windows cover it; the same image
+  shown elsewhere (in a browser) doesn't line up and is still checked. Re-checks the wallpaper every 2 minutes.
+- Tested on a virtual desktop with a bright wallpaper and a browser window over half of it: switch off, the
+  wallpaper was blurred; switch on, it wasn't, and both pictures in the browser (one the same image as the
+  wallpaper) still were. First attempt failed: it compared whole regions, and windows covering the desktop
+  dragged the match below the line; matching pixel by pixel fixed it.
+- Tray: "Ignore my desktop wallpaper" (on by default).
+
+## v0.11 (Jack: opening Task Manager over the picture folder left blur boxes blurring patches of Task Manager)
+- Cause: the hover-highlight rule ("a bigger shape around a known picture is that picture") also matched a
+  window opened on top, so old boxes stayed and blurred the window.
+- Now every frame, still pictures are checked as a 32x32 grid of color samples: mostly covered pictures lose
+  their blur at once; partly covered ones are blurred only on the cells still showing the picture. A bigger
+  shape counts as the picture only if the picture's pixels are unchanged; a box whose outline really changed is
+  replaced. When the window closes, blurs come back instantly and grow back to full size (only if the extra
+  area is more picture, not a flat highlight or a file name). "Video" (same outline, changing pixels) is only
+  judged while still, since scrolling shifts pixels too.
+- Test: Explorer-style folder with a dark Task Manager stand-in: blur on the window 61% -> 0.1% while open
+  (also after scrolling), fully restored after closing. Hover, grid scrolling, labels, wallpaper, cut-outs and
+  feed tests all unchanged.

@@ -33,7 +33,12 @@ export function findRegions(img, opt = {}) {
   const B = opt.block || 8;
   const minW = opt.minW || 100, minH = opt.minH || 80;
   const bg = opt.bg || backgroundColors(img);
-  const isBg = (i) => { for (const c of bg) if (Math.abs(data[i] - c[0]) + Math.abs(data[i + 1] - c[1]) + Math.abs(data[i + 2] - c[2]) <= 18) return true; return false; };
+  const wd = opt.wall || null; // the desktop wallpaper as laid out on screen: pixels matching it count as background
+  const isBg = (i) => {
+    if (wd && Math.abs(data[i] - wd[i]) + Math.abs(data[i + 1] - wd[i + 1]) + Math.abs(data[i + 2] - wd[i + 2]) <= 30) return true;
+    for (const c of bg) if (Math.abs(data[i] - c[0]) + Math.abs(data[i + 1] - c[1]) + Math.abs(data[i + 2] - c[2]) <= 18) return true;
+    return false;
+  };
   const bw = Math.floor(W / B), bh = Math.floor(H / B);
   const mask = new Uint8Array(bw * bh);
   for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {

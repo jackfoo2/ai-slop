@@ -37,6 +37,10 @@ async def main():
             await pg.evaluate(f"document.querySelectorAll('.it').forEach(e => e.classList.remove('hover')); document.querySelector('#it{item}').classList.add('hover')")
             await asyncio.sleep(4)
             got, n = await blurred_items()
+            st2 = await ov.evaluate('window.__slopState()'); k2 = st2['k']
+            r = (await pg.evaluate("[...document.querySelectorAll('.media')].map(e => { const r = e.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; })"))[item]
+            near = [b for b in st2['boxes'] if abs(b['x'] / k2 - r['x']) < 40 and abs(b['y'] / k2 - (r['y'] + top)) < 60]
+            print('   DEBUG boxes near the hovered thumbnail:', [{kk: (round(v / k2) if kk in 'xywh' else v) for kk, v in b.items() if kk != 'p'} for b in near], 'truth', {kk: round(v) for kk, v in r.items()})
             print(f'hover highlight held on thumbnail {item + 1} for 4 s: that one still blurred = {item in got}, total blurred {len(got)} of {n}')
         el.terminate(); await br.close()
     srv.terminate(); xvfb.terminate()

@@ -32,6 +32,8 @@ async def main():
         for _ in range(15): await pg.mouse.wheel(0, -40); await asyncio.sleep(1.3)
         await asyncio.sleep(0.5)
         await report('BACK AT THE TOP')
+        await asyncio.sleep(3); await report('AGAIN 3 S LATER')
+        st = await ov.evaluate('window.__slopState()'); print('   boxes:', [{kk: v for kk, v in b.items() if kk in ('y', 'blurred', 'covered', 'cellsOn', 'dynamic', 'p')} for b in st['boxes']])
         el.terminate(); await br.close()
     srv.terminate(); xvfb.terminate()
 asyncio.run(main())

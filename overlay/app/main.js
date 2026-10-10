@@ -7,7 +7,7 @@ const MODEL = {
   url: 'https://huggingface.co/Vontra/detectra-v1/resolve/d8709d3c39aa69ab862748badce0d4a06e90bf4c/model.onnx',
   sha256: '1414b9aafaa01a644ed706224973f09b53a1388282104409862df9893b1b962b',
 };
-const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true };
+const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true };
 let settings = { ...DEFAULTS }, win = null, tray = null, gameReason = null, gameClearSince = 0, gameWatcher = null;
 let status = { model: 'starting', engine: null, flagged: 0, tracked: 0, fps: 0, error: null };
 
@@ -47,6 +47,21 @@ const toAB = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 ipcMain.handle('model', async () => { try { return toAB(await modelBytes()); } catch (e) { log('model error', String(e)); setStatus({ model: 'error', error: String(e.message || e) }); throw e; } });
 ipcMain.handle('wasm', () => toAB(fs.readFileSync(path.join(__dirname, 'vendor', 'ort', 'ort-wasm-simd-threaded.jsep.wasm'))));
 ipcMain.handle('settings', () => settings);
+// the desktop wallpaper: the image Windows is showing, and how it's fitted to the screen
+ipcMain.handle('wallpaper', () => {
+  try {
+    let file = process.env.SLOP_WALLPAPER || '', style = process.env.SLOP_WALLPAPER_STYLE || '10', tile = '0';
+    if (!file && process.platform === 'win32') {
+      const { execFileSync } = require('child_process');
+      const ps = "$k = Get-ItemProperty 'HKCU:\\Control Panel\\Desktop'; $t = Join-Path $env:APPDATA 'Microsoft\\Windows\\Themes\\TranscodedWallpaper'; [Console]::Out.WriteLine((@{ path = [string]$k.WallPaper; style = [string]$k.WallpaperStyle; tile = [string]$k.TileWallpaper; t = $(if (Test-Path $t) { $t } else { '' }) } | ConvertTo-Json -Compress))";
+      const o = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 8000 }).toString().trim());
+      file = o.t || o.path; style = o.style || '10'; tile = o.tile || '0';
+    }
+    if (!file || !fs.existsSync(file)) return null;
+    const st = fs.statSync(file);
+    return { bytes: toAB(fs.readFileSync(file)), style: String(style), tile: String(tile), stamp: `${file}:${st.mtimeMs}:${style}:${tile}` };
+  } catch (e) { log('wallpaper check failed', String(e?.message || e)); return null; }
+});
 ipcMain.handle('display', () => { const d = screen.getPrimaryDisplay(); return { width: d.bounds.width, height: d.bounds.height, scale: d.scaleFactor }; });
 ipcMain.on('clickable', (_e, on) => { if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!on, { forward: true }); });
 ipcMain.on('status', (_e, s) => setStatus(s));
@@ -83,6 +98,7 @@ function buildMenu() {
     { label: 'Sensitivity', submenu: radio('sensitivity', [['sensitive', 'Sensitive (flags at 50%)'], ['balanced', 'Balanced (65%)'], ['strict', 'Strict (80%)']]) },
     { label: 'Check videos', type: 'checkbox', checked: settings.video, click: () => setSetting('video', !settings.video) },
     { label: 'Turn off during games', type: 'checkbox', checked: settings.gameGuard, click: () => setSetting('gameGuard', !settings.gameGuard) },
+    { label: 'Ignore my desktop wallpaper', type: 'checkbox', checked: settings.ignoreWallpaper, click: () => setSetting('ignoreWallpaper', !settings.ignoreWallpaper) },
     { label: 'Read labels and watermarks', type: 'checkbox', checked: settings.readText, click: () => setSetting('readText', !settings.readText) },
     { label: 'Show scores on every picture', type: 'checkbox', checked: settings.showScores, click: () => setSetting('showScores', !settings.showScores) },
     { type: 'separator' },

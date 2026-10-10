@@ -13,7 +13,7 @@ const view = document.getElementById('view'), vctx = view.getContext('2d');
 const chipsEl = document.getElementById('chips');
 const video = document.createElement('video'); video.muted = true;
 const frame = document.createElement('canvas'), fctx = frame.getContext('2d', { willReadFrequently: true });
-let settings = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, showScores: false, readText: true };
+let settings = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, showScores: false, readText: true, ignoreWallpaper: true };
 let frameAt = 0, prevFrameAt = 0; // when the latest captured frame was taken (performance.now clock)
 let engine = null, tracker = new Tracker({ searchY: 60 }), k = 1; // k = processed pixels per CSS pixel
 let f = 1; // processed pixels per captured pixel (big screens are processed at a lighter size)
@@ -56,6 +56,7 @@ async function start() {
     f = Math.min(1, MAX_PROC_W / video.videoWidth);
     k = (video.videoWidth * f) / disp.width || 1;
     slop.log('capturing', { video: [video.videoWidth, video.videoHeight], display: disp, k, engine: engine.name });
+    loadWallpaper(); setInterval(loadWallpaper, 120000); // after capture starts (needs the screen size); picks up a changed wallpaper
     video.requestVideoFrameCallback(onFrame);
     requestAnimationFrame(renderLoop);
   } catch (e) {
@@ -100,6 +101,7 @@ function step() {
   const gc = grayDown(img, 4), gf = grayDown(img, 1); mark('gray');
   tracker.update(gc, gf); scrollAcc += tracker.pageShift || 0; mark('track');
   const now = performance.now();
+  checkCovered(img); // first: which pictures has something been put on top of?
   if (now - lastDetect > DETECT_EVERY) { lastDetect = now; detect(img); mark('detect'); }
   for (const b of tracker.boxes) if (b.p == null ? !b.scoring : (b.nextScore && now > b.nextScore)) queueScore(b); // unscored pictures retry every frame
   if (settings.readText && !ocrBusy) { const b = tracker.boxes.find((x) => !x.ocrDone && Math.abs(x.vpm || 0) < 0.02 && x.y >= 0 && x.y + x.h <= frame.height); if (b) queueOcr(b); }
@@ -120,16 +122,32 @@ function step() {
 const iou = (a, b) => { const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y), x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h); const i = Math.max(0, x1 - x0) * Math.max(0, y1 - y0); return i / (a.w * a.h + b.w * b.h - i); };
 
 function detect(img) {
-  const found = findRegions(img, { block: Math.max(8, Math.round(8 * k)), minW: 120 * k, minH: 90 * k });
+  const found = findRegions(img, { block: Math.max(8, Math.round(8 * k)), minW: 120 * k, minH: 90 * k, wall: settings.ignoreWallpaper && wall && wall.width === img.width && wall.height === img.height ? wall.data : null });
   const seen = new Set();
   for (const r of found) {
+    if (onWallpaper(img, r)) { const old = tracker.boxes.find((b) => iou(b, r) > 0.3); if (old) old.miss = 9; continue; } // it's the desktop
     const inter = (b) => Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x)) * Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
-    const hit = tracker.boxes.find((b) => iou(b, r) > 0.3) || tracker.boxes.find((b) => inter(b) > 0.8 * b.w * b.h);
+    const hit = tracker.boxes.find((b) => iou(b, r) > 0.3);
     if (hit) {
       const ratio = (r.w * r.h) / (hit.w * hit.h);
-      if (ratio > 0.7 && ratio < 1.4) snapTo(hit, r); // a much bigger shape around it (hover highlight): keep the picture's own box
-      hit.miss = 0; hit.thumb = thumbOf(img, hit); seen.add(hit.id); continue;
+      if (ratio > 0.7 && ratio < 1.4) snapTo(hit, r);
+      // the picture grew back (a window over part of it closed): take the bigger outline if the extra is more picture,
+      // not a flat hover highlight or a file name
+      else if (ratio >= 1.4 && inter(hit) > 0.9 * hit.w * hit.h && morePicture(img, r, hit)) { hit.x = r.x; hit.y = r.y; hit.w = r.w; hit.h = r.h; hit.cells = null; hit.covered = false; hit.thumb = thumbOf(img, hit); }
+      const same = !hit.thumb || sameContent(img, hit), match = iou(hit, r);
+      const still = Math.abs(hit.vpm || 0) < 0.02;
+      if (!same && still && match < 0.9) { hit.miss = 9; } // its outline really changed (covered, or now only partly showing): replace it with what's there now
+      else {
+      // same outline, different pixels: a video (or the picture was swapped); re-check it soon from fresh scores
+      if (!same && still && !hit.dynamic) { hit.dynamic = true; hit.covered = false; hit.cells = null; hit.history = []; hit.nextScore = performance.now(); } // only judged while still: scrolling shifts pixels too
+      hit.miss = 0; if (!hit.cells && !hit.covered) hit.thumb = thumbOf(img, hit); seen.add(hit.id); continue;
+      }
     }
+    // a much bigger shape around a known picture (e.g. a hover highlight) only counts as that picture if the
+    // picture itself is unchanged; a window opened on top (Task Manager...) is not the picture
+    tracker.boxes = tracker.boxes.filter((b) => (b.miss || 0) < 9);
+    const around = tracker.boxes.find((b) => inter(b) > 0.8 * b.w * b.h);
+    if (around) { if (around.thumb && sameContent(img, around)) { around.miss = 0; seen.add(around.id); } continue; }
     const b = tracker.add({ ...r, p: null, history: [], sig: signature(img, r) });
     b.thumb = thumbOf(img, b);
     const known = cache.get(b.sig);
@@ -150,6 +168,31 @@ function detect(img) {
   for (const [id, el] of chips) if (!tracker.boxes.some((b) => b.id === id)) { el.remove(); chips.delete(id); }
 }
 
+/** Is the part of r outside box b genuinely picture (many colors), rather than flat fill or text? */
+function morePicture(img, r, b) {
+  const { data, width: W } = img, count = new Map(); let n = 0, top = 0;
+  const st = Math.max(2, Math.floor(Math.sqrt((r.w * r.h) / 4000)));
+  for (let y = r.y; y < r.y + r.h; y += st) for (let x = r.x; x < r.x + r.w; x += st) {
+    if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) continue;
+    const q = (Math.floor(y) * W + Math.floor(x)) * 4; n++;
+    const c = ((data[q] >> 4) << 8) | ((data[q + 1] >> 4) << 4) | (data[q + 2] >> 4), v = (count.get(c) || 0) + 1;
+    count.set(c, v); if (v > top) top = v;
+  }
+  // many colors AND no single flat color dominating (a highlight is mostly one color, even with a file name on it)
+  return n > 20 && count.size >= 24 && top / n < 0.35;
+}
+
+/** For still pictures: which parts now show something else (a window on top), checked as a 16x16 grid. */
+function checkCovered(img) {
+  for (const b of tracker.boxes) {
+    if (Math.abs(b.vpm || 0) > 0.02) { b.cells = null; b.covered = false; continue; } // moving: no partial covering logic
+    if (b.dynamic || !b.thumb || b.y < 0 || b.y + b.h > img.height) continue;
+    const c = cellsOf(img, b);
+    b.covered = c.frac < 0.25;                      // mostly covered: no blur at all
+    b.cells = c.frac < 1 ? c.m : null;              // partly covered: blur only the parts still showing the picture
+  }
+}
+
 /** Correct a tracked box from a fresh detection without making it jump around. */
 function snapTo(b, r) {
   if (Math.abs(r.x - b.x) > 2 || Math.abs(r.w - b.w) > 2) { b.x = r.x; b.w = r.w; }
@@ -159,20 +202,63 @@ function snapTo(b, r) {
   else { b.clipTop = b.clipBot = null; if (Math.abs(dTop) > 2 || Math.abs(dBot) > 2) { b.y = r.y; b.h = r.h; } }
 }
 
+// ---- the desktop wallpaper: drawn the way Windows lays it out, so it can be recognized wherever it shows
+let wall = null, wallStamp = '';
+async function loadWallpaper() {
+  try {
+    const w = await slop.wallpaper();
+    if (!w) { wall = null; wallStamp = ''; return; }
+    if (w.stamp === wallStamp && wall) return;
+    const bmp = await createImageBitmap(new Blob([w.bytes]));
+    const W = Math.round(video.videoWidth * f), H = Math.round(video.videoHeight * f);
+    if (!W || !H) return;
+    const c = new OffscreenCanvas(W, H), g = c.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H); g.imageSmoothingQuality = 'high';
+    const iw = bmp.width * f, ih = bmp.height * f; // image pixels map 1:1 to screen pixels before fitting
+    if (w.style === '2') g.drawImage(bmp, 0, 0, W, H);                                                      // stretch
+    else if (w.style === '10' || w.style === '22') { const s = Math.max(W / bmp.width, H / bmp.height); g.drawImage(bmp, (W - bmp.width * s) / 2, (H - bmp.height * s) / 2, bmp.width * s, bmp.height * s); } // fill / span
+    else if (w.style === '6') { const s = Math.min(W / bmp.width, H / bmp.height); g.drawImage(bmp, (W - bmp.width * s) / 2, (H - bmp.height * s) / 2, bmp.width * s, bmp.height * s); }  // fit
+    else if (w.tile === '1') { for (let y = 0; y < H; y += ih) for (let x = 0; x < W; x += iw) g.drawImage(bmp, x, y, iw, ih); }        // tile
+    else g.drawImage(bmp, (W - iw) / 2, (H - ih) / 2, iw, ih);                                               // center
+    bmp.close();
+    wall = g.getImageData(0, 0, W, H); wallStamp = w.stamp;
+    slop.log('wallpaper loaded', { style: w.style, tile: w.tile, size: [W, H] });
+  } catch (e) { slop.log('wallpaper load failed', String(e?.message || e)); }
+}
+/** True when most of this region matches the wallpaper at the same spot on screen (desktop icons and
+ *  small differences allowed). Pictures that just look like the wallpaper elsewhere won't line up. */
+function onWallpaper(img, r) {
+  if (!settings.ignoreWallpaper || !wall || wall.width !== img.width || wall.height !== img.height) return false;
+  const a = img.data, w = wall.data, W = img.width; let match = 0, n = 0;
+  for (let j = 0; j < 12; j++) for (let i = 0; i < 12; i++) {
+    const x = Math.floor(r.x + ((i + 0.5) * r.w) / 12), y = Math.floor(r.y + ((j + 0.5) * r.h) / 12), q = (y * W + x) * 4;
+    n++; if (Math.abs(a[q] - w[q]) + Math.abs(a[q + 1] - w[q + 1]) + Math.abs(a[q + 2] - w[q + 2]) < 45) match++;
+  }
+  return match / n >= 0.65;
+}
+
 /** An 8x8 gray thumbnail of what's inside a box right now, to tell "same picture" from "something else". */
-function thumbOf(img, b) {
-  const { data, width: W, height: H } = img, t = new Float32Array(64);
-  for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) {
-    const x = Math.min(W - 1, Math.max(0, Math.floor(b.x + ((i + 0.5) * b.w) / 8))), y = Math.min(H - 1, Math.max(0, Math.floor(b.y + ((j + 0.5) * b.h) / 8))), q = (y * W + x) * 4;
-    t[j * 8 + i] = (data[q] * 77 + data[q + 1] * 150 + data[q + 2] * 29) >> 8;
+const G = 32; // a picture is checked as a 32x32 grid of cells
+function thumbOf(img, b) { // color samples: R, G, B per cell
+  const { data, width: W, height: H } = img, t = new Uint8Array(G * G * 3);
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
+    const x = Math.min(W - 1, Math.max(0, Math.floor(b.x + ((i + 0.5) * b.w) / G))), y = Math.min(H - 1, Math.max(0, Math.floor(b.y + ((j + 0.5) * b.h) / G))), q = (y * W + x) * 4, o = (j * G + i) * 3;
+    t[o] = data[q]; t[o + 1] = data[q + 1]; t[o + 2] = data[q + 2];
   }
   return t;
 }
+const cellDiff = (a, b, c) => Math.abs(a[c * 3] - b[c * 3]) + Math.abs(a[c * 3 + 1] - b[c * 3 + 1]) + Math.abs(a[c * 3 + 2] - b[c * 3 + 2]);
 function sameContent(img, b) {
   if (b.y < 0 || b.y + b.h > img.height) return false; // partly off screen: let the normal rules decide
   const now = thumbOf(img, b); let d = 0;
-  for (let i = 0; i < 64; i++) d += Math.abs(now[i] - b.thumb[i]);
-  return d / 64 < 14;
+  for (let i = 0; i < G * G; i++) d += cellDiff(now, b.thumb, i);
+  return d / (G * G) < 36;
+}
+/** Which cells of a picture still show the picture (1) and which are covered by something else (0). */
+function cellsOf(img, b) {
+  const now = thumbOf(img, b), m = new Uint8Array(G * G); let n = 0;
+  for (let i = 0; i < G * G; i++) { m[i] = cellDiff(now, b.thumb, i) < 45 ? 1 : 0; n += m[i]; }
+  return { m, frac: n / (G * G) };
 }
 
 /** A tiny fingerprint of a picture's content, so scrolling away and back doesn't rescore it. */
@@ -251,7 +337,7 @@ function queueScore(b) {
 
 const textP = (b) => (b.textHit ? (b.textHit.kind === 'watermark' ? 0.97 : 0.9) : 0);
 const effP = (b) => Math.max(b.p ?? 0, textP(b));
-const isBlurred = (b) => (b.p != null || b.textHit) && effP(b) >= thr() && !b.revealed && (b.lost || 0) < 2;
+const isBlurred = (b) => (b.p != null || b.textHit) && effP(b) >= thr() && !b.revealed && !b.covered && (b.lost || 0) < 2;
 
 // ---- drawing: its own loop at the screen's refresh rate, projecting each box forward by how fast it
 // moves and how old the latest capture is, so the blur keeps up with scrolling between captures
@@ -260,7 +346,7 @@ function uiEl(map, id, make, kind = '') { let el = map.get(id); if (el && el.dat
 function clickableEl(el) { el.addEventListener('mouseenter', () => slop.clickable(true)); el.addEventListener('mouseleave', () => slop.clickable(false)); return el; }
 function reveal(b) { b.revealed = true; const c = cache.get(b.sig); if (c) c.revealed = true; slop.clickable(false); }
 
-let lastRender = 0;
+let lastRender = 0, drawn = []; // drawn: the blurred rectangles of the last frame (for tests)
 function renderLoop() { render(); requestAnimationFrame(renderLoop); }
 // backup: if the screen-refresh loop ever stalls, keep drawing anyway
 setInterval(() => { if (performance.now() - lastRender > 120) render(); }, 60);
@@ -269,7 +355,7 @@ function render() {
   if (settings.paused || !engine) return;
   vctx.clearRect(0, 0, view.width, view.height);
   const now = performance.now(), ahead = Math.min(150, Math.max(0, now - frameAt + 8)); // ms the screen is ahead of our capture
-  const live = new Set();
+  const live = new Set(); drawn = [];
   for (const b of tracker.boxes) {
     const y = b.y + (b.vpm || 0) * ahead;
     const top = Math.max(y, b.clipTop ?? -1e9), bottom = Math.min(y + b.h, b.clipBot ?? 1e9);
@@ -279,7 +365,12 @@ function render() {
       const moving = Math.abs(b.vpm || 0) > 0.05, m = moving ? Math.min(14, Math.abs(b.vpm) * 25) : 0; // a little extra cover while scrolling
       const px = blurPx(effP(b)) * k, pad = Math.ceil(px * 2);
       vctx.save();
-      vctx.beginPath(); vctx.rect(b.x, top - m, b.w, bottom - top + 2 * m); vctx.clip();
+      vctx.beginPath();
+      if (b.cells) {
+        const cw = b.w / G, ch = b.h / G;
+        for (let j = 0; j < G; j++) { let i = 0; while (i < G) { if (!b.cells[j * G + i]) { i++; continue; } let e = i; while (e < G && b.cells[j * G + e]) e++; vctx.rect(b.x + i * cw, y + j * ch, (e - i) * cw, ch); drawn.push([b.x + i * cw, y + j * ch, (e - i) * cw, ch]); i = e; } }
+      } else { vctx.rect(b.x, top - m, b.w, bottom - top + 2 * m); drawn.push([b.x, top - m, b.w, bottom - top + 2 * m]); }
+      vctx.clip();
       vctx.filter = `blur(${px.toFixed(1)}px) saturate(0.85)`;
       vctx.drawImage(frame, b.x - pad, b.y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m, b.x - pad, y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m);
       vctx.restore();
@@ -314,8 +405,15 @@ function clearAll() {
 // test hook: lets the test harness read what the overlay is doing
 let lastFps = 0;
 window.__slopPerf = () => { const o = { frames: perf.n, avgMs: +(perf.ms / Math.max(1, perf.n)).toFixed(1) }; for (const [k2, v] of Object.entries(perf.parts)) o[k2] = +(v / Math.max(1, perf.n)).toFixed(1); perf.n = 0; perf.ms = 0; perf.parts = {}; return o; };
+window.__wallCheck = () => {
+  if (!wall) return 'no wallpaper loaded';
+  const img = fctx.getImageData(0, 0, frame.width, frame.height), a = img.data, w = wall.data;
+  return tracker.boxes.map((b) => { let m = 0, n = 0, d = 0; for (let j = 0; j < 12; j++) for (let i = 0; i < 12; i++) { const x = Math.floor(b.x + ((i + 0.5) * b.w) / 12), y = Math.floor(b.y + ((j + 0.5) * b.h) / 12), q = (y * img.width + x) * 4; const e = Math.abs(a[q] - w[q]) + Math.abs(a[q + 1] - w[q + 1]) + Math.abs(a[q + 2] - w[q + 2]); d += e; n++; if (e < 45) m++; }
+    return { box: [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)], match: +(m / n).toFixed(2), avgDiff: Math.round(d / n), blurred: isBlurred(b) }; });
+};
+window.__slopDrawn = () => drawn.map((r) => r.map((v) => +(v / k).toFixed(1)));
 window.__slopUI = () => ({ ocrAvgMs: ocrN ? Math.round(ocrMs / ocrN) : null, texts: tracker.boxes.map((b) => ({ y: Math.round(b.y / k), done: !!b.ocrDone, hit: b.textHit, blurred: isBlurred(b) })), chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
-window.__slopState = () => ({ scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b) })) });
+window.__slopState = () => ({ scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b), covered: !!b.covered, cellsOn: b.cells ? b.cells.reduce((a, c) => a + c, 0) : null, dynamic: !!b.dynamic, miss: b.miss || 0, lost: b.lost || 0 })) });
 // ---- the control bar (top-left): on/off and close
 const bar = document.getElementById('bar');
 function paintBar() {
