@@ -83,3 +83,12 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Hover highlight (light blue behind a thumbnail) made the picture unrecognizable to re-scans, which then
   dropped it. Now a bigger shape around a known picture counts as that picture, and a blur is only dropped
   if the pixels inside it actually changed. Tested: highlight held on two thumbnails, blurs stayed.
+
+## v0.8 (Jack: many test pictures have plain white or black backgrounds, a blind spot)
+- Pictures whose background matches the page (white on white, black on black) only show their subject, an
+  odd-shaped blob, which the rectangle-only finder threw out (0 of 21 found). Now big, genuinely colorful
+  blobs count as pictures too (text, logos and icons are two-tone, so they don't). Found 17 of 21 on both
+  white and black test pages; misses are tall thin product shots at thumbnail size. No stray boxes; the
+  feed and folder tests are unchanged.
+- Decided against "unnatural plain background" as an AI signal: real product photos, stock and clipart have
+  it too.

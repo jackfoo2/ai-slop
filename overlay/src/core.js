@@ -45,7 +45,8 @@ export function findRegions(img, opt = {}) {
   const boxes = [];
   for (const c of components(m, bw, bh)) {
     const whole = { x: c.x0 * B, y: c.y0 * B, w: (c.x1 - c.x0 + 1) * B, h: (c.y1 - c.y0 + 1) * B };
-    if (whole.w < minW || whole.h < minH) continue;
+    const before = boxes.length;
+    if (whole.w < minW || whole.h < minH) { cutout(); continue; }
     // pictures packed close together (galleries, folders of thumbnails) can blur into one blob:
     // cut it apart wherever a clean strip of background runs all the way through
     for (const part of xyCut(img, whole, isBg, 0)) {
@@ -55,6 +56,18 @@ export function findRegions(img, opt = {}) {
       if (b.w < minW || b.h < minH) continue;
       if (!varied(img, b)) continue; // flat panels and buttons aren't pictures
       boxes.push(b);
+    }
+    cutout();
+    // A picture whose own background matches the page (white on white, black on black) shows up only as
+    // its subject: an odd-shaped blob instead of a rectangle. Accept it if it's big enough and genuinely
+    // colorful (big text and logos are two-tone, so they don't qualify).
+    function cutout() {
+      if (boxes.length > before) return;
+      const area = whole.w * whole.h, short = Math.min(whole.w, whole.h), aspect = whole.w / whole.h;
+      if (area < 0.8 * minW * minH || short < 0.35 * minW || aspect < 0.25 || aspect > 4) return;
+      if (c.n / ((c.x1 - c.x0 + 1) * (c.y1 - c.y0 + 1)) < 0.3) return;
+      if (!colorful(img, whole, isBg)) return;
+      boxes.push({ ...whole, cutout: true });
     }
   }
   return boxes;
@@ -85,6 +98,19 @@ function blockFill(m, bw, b, B) {
   let n = 0, t = 0;
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { t++; if (m[y * bw + x]) n++; }
   return t ? n / t : 0;
+}
+
+/** Many distinct colors among the non-background pixels (a picture), not a few (text, logos, icons). */
+function colorful(img, b, isBg) {
+  const { data, width: W } = img, seen = new Set();
+  let n = 0, fg = 0;
+  const st = Math.max(2, Math.floor(Math.sqrt((b.w * b.h) / 3000)));
+  for (let y = b.y; y < b.y + b.h; y += st) for (let x = b.x; x < b.x + b.w; x += st) {
+    const i = (y * W + x) * 4; n++;
+    if (isBg(i)) continue;
+    fg++; seen.add(((data[i] >> 4) << 8) | ((data[i + 1] >> 4) << 4) | (data[i + 2] >> 4));
+  }
+  return fg / n >= 0.2 && seen.size >= 24;
 }
 
 function varied(img, b) {
