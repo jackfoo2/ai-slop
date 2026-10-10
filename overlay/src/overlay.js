@@ -18,6 +18,25 @@ let engine = null, tracker = new Tracker({ searchY: 60 }), k = 1; // k = process
 let f = 1; // processed pixels per captured pixel (big screens are processed at a lighter size)
 let lastDetect = 0, frames = 0, fpsT = performance.now(), scoring = 0;
 const cache = new Map(); // picture signature -> { p, revealed }
+// pictures you've scrolled past, remembered by where they sit on the page, so scrolling back re-blurs at once
+let scrollAcc = 0; // total distance the page has moved (screen y minus this = position on the page)
+const departed = [], lastSeen = new Map();
+function rememberDeparted(now) {
+  const alive = new Set(tracker.boxes.map((b) => b.id));
+  for (const [id, d] of lastSeen) if (!alive.has(id)) { if (d.p != null) { departed.push({ ...d, at: now }); if (departed.length > 300) departed.shift(); } lastSeen.delete(id); }
+  for (const b of tracker.boxes) if (b.p != null) lastSeen.set(b.id, { x: b.x, w: b.w, top: b.y - scrollAcc, h: b.h, p: b.p, revealed: !!b.revealed, history: b.history.slice() });
+}
+function recall(r) {
+  const top = r.y - scrollAcc, bot = top + r.h;
+  let best = null, bestOv = 0;
+  for (let i = departed.length - 1; i >= 0; i--) {
+    const d = departed[i];
+    if (Math.abs(d.x - r.x) > 12 || Math.abs(d.w - r.w) > 24) continue;
+    const ov = Math.min(bot, d.top + d.h) - Math.max(top, d.top);
+    if (ov > 0.5 * Math.min(r.h, d.h) && ov > bestOv) { best = d; bestOv = ov; }
+  }
+  return best;
+}
 const chips = new Map(); // box id -> chip element
 const thr = () => THRESH[settings.sensitivity] ?? 0.65;
 const blurPx = (p) => { const t = thr(), [lo, hi] = BLUR[settings.strength] || BLUR.light; const q = Math.min(1, Math.max(0, (p - t) / (1 - t))); return lo + (hi - lo) * q; };
@@ -77,10 +96,11 @@ function step() {
   fctx.drawImage(video, 0, 0, W, H); mark('draw');
   const img = fctx.getImageData(0, 0, W, H); mark('read');
   const gc = grayDown(img, 4), gf = grayDown(img, 1); mark('gray');
-  tracker.update(gc, gf); mark('track');
+  tracker.update(gc, gf); scrollAcc += tracker.pageShift || 0; mark('track');
   const now = performance.now();
   if (now - lastDetect > DETECT_EVERY) { lastDetect = now; detect(img); mark('detect'); }
-  for (const b of tracker.boxes) if (b.nextScore && now > b.nextScore && b.p != null) queueScore(b);
+  for (const b of tracker.boxes) if (b.p == null ? !b.scoring : (b.nextScore && now > b.nextScore)) queueScore(b); // unscored pictures retry every frame
+  rememberDeparted(now);
   // how fast each box is moving, per millisecond, so drawing can project it forward between captures
   const dt = Math.max(8, Math.min(200, frameAt - prevFrameAt || 33));
   for (const b of tracker.boxes) b.vpm = (b.vy || 0) / dt;
@@ -105,7 +125,9 @@ function detect(img) {
     const b = tracker.add({ ...r, p: null, history: [], sig: signature(img, r) });
     const known = cache.get(b.sig);
     seen.add(b.id);
+    const back = known ? null : recall(r);
     if (known) { b.p = known.p; b.revealed = known.revealed; b.nextScore = performance.now() + RESCORE_CLEAN; }
+    else if (back) { b.p = back.p; b.revealed = back.revealed; b.history = back.history.slice(); b.nextScore = performance.now() + 1000; } // scrolled back: blur at once, re-check soon
     else queueScore(b);
   }
   // a picture that two re-scans in a row can't find is gone: drop it (and its blur) right away
@@ -135,7 +157,7 @@ function signature(img, r) {
 }
 
 function queueScore(b) {
-  if (b.scoring || scoring >= 2) return;
+  if (b.scoring || scoring >= 4) return;
   if (!settings.video && b.history.length) return;
   b.scoring = true; scoring++;
   const x = Math.max(0, Math.round(b.x)), y = Math.max(0, Math.round(b.y));
@@ -217,7 +239,7 @@ function clearAll() {
 let lastFps = 0;
 window.__slopPerf = () => { const o = { frames: perf.n, avgMs: +(perf.ms / Math.max(1, perf.n)).toFixed(1) }; for (const [k2, v] of Object.entries(perf.parts)) o[k2] = +(v / Math.max(1, perf.n)).toFixed(1); perf.n = 0; perf.ms = 0; perf.parts = {}; return o; };
 window.__slopUI = () => ({ chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
-window.__slopState = () => ({ paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b) })) });
+window.__slopState = () => ({ scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b) })) });
 // ---- the control bar (top-left): on/off and close
 const bar = document.getElementById('bar');
 function paintBar() {

@@ -1,4 +1,4 @@
-AI Slop Overlay, v0.5
+AI Slop Overlay, v0.6
 Lightly blurs pictures and videos that look AI-generated, anywhere on your screen.
 
 NEEDS: Windows 10 (version 2004 or newer) or Windows 11, 64-bit.

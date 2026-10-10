@@ -140,7 +140,13 @@ export class Tracker {
   /** coarse = grayDown(frame, 4), fine = grayDown(frame, 1). Returns the shifts applied, per column. */
   update(coarse, fine) {
     const pc = this.prevC, pf = this.prevF; this.prevC = coarse; this.prevF = fine;
-    if (!pc || pc.w !== coarse.w || pc.h !== coarse.h || !this.boxes.length) return [];
+    this.pageShift = 0;
+    if (!pc || pc.w !== coarse.w || pc.h !== coarse.h) return [];
+    // how far the page moved, from a band down the middle of the screen (works even between pictures)
+    const band = { x0: fine.w * 0.25, x1: fine.w * 0.75, boxes: [] };
+    this.pageShift = measureColumn(pc, coarse, pf, fine, band, this.boxes, this.searchY, this.pageVy || 0) ?? 0;
+    this.pageVy = this.pageShift;
+    if (!this.boxes.length) return [];
     const shifts = [];
     for (const col of columns(this.boxes)) {
       // sample the page around the pictures once per frame, at both sizes
@@ -163,6 +169,16 @@ export class Tracker {
     this.boxes = this.boxes.filter((b) => b.lost < 3 && b.y + b.h > 0 && b.y < H && b.x + b.w > 0 && b.x < W);
     return shifts;
   }
+}
+
+/** The vertical shift of one column between two frames, or null if it can't tell. */
+function measureColumn(pc, coarse, pf, fine, col, boxes, searchY, last) {
+  const ptsC = samplePoints(pc, col, boxes, 4, 1), ptsF = samplePoints(pf, col, boxes, 1, 6);
+  const cands = scoreShifts(coarse, ptsC, -searchY, searchY, 5).filter((c) => c.err < 40).map((c) => c.dy);
+  const windows = [...cands.map((c) => [c * 4 - 5, c * 4 + 5]), [Math.round(last) - 4, Math.round(last) + 4], [-2, 2]];
+  let best = null;
+  for (const [lo, hi] of windows) { const r = scoreShifts(fine, ptsF, lo, hi, 1)[0]; if (r && (!best || r.err < best.err)) best = r; }
+  return best && best.err < 25 ? best.dy : null;
 }
 
 /** Group boxes whose x-ranges overlap: each group is one scrolling column. */

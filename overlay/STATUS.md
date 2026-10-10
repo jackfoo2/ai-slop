@@ -67,3 +67,11 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Scores each picture twice (middle crop as trained, plus the whole picture) and keeps the higher.
 - X button on every blur; tray "Show scores on every picture" for diagnosing misses.
 - Known weak spot: the model is trained mostly on photo-style AI; illustrated/cartoon AI art scores lower.
+
+## v0.6 (Jack: only one blur at a time; scrolling back cancels the blur)
+- Bug: pictures that arrived while the two scoring slots were busy were skipped and never retried.
+  Now any unscored picture retries every frame, up to 4 at once. Tested: 6-picture grid, all 6 blurred.
+- Memory of scrolled-past pictures: the tracker also measures overall page scroll (a band down the middle
+  of the screen, works between pictures; exact to the pixel over 2,550 px of recorded scrolling). Each
+  scored picture is remembered by its position on the page; when it comes back it re-blurs at once and is
+  re-checked a second later. Tested: down 600 px and back, all re-blurred.
