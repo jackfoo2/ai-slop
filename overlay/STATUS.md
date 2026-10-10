@@ -57,3 +57,13 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
   While a game runs, the overlay window is destroyed (screen capture stops); it returns 10 s after.
   Tested on Linux with a scripted feed; the PowerShell helper itself is untested (no Windows here);
   its errors go to the log ("game check error").
+
+## v0.5 (Jack: jumpy while scrolling, misses obvious AI images, wants an X on the blur)
+- Drawing runs on its own loop at the screen's refresh rate (backup timer if that stalls), projecting
+  each box forward by its speed and the capture's age, with a little extra cover while moving.
+- Re-scans only move boxes for real differences (>2 px); pictures partly covered by a sticky bar or the
+  screen edge keep their size and get clipped instead of shrinking and growing back.
+- A blur survives one uncertain tracking frame (projected forward) instead of flickering off.
+- Scores each picture twice (middle crop as trained, plus the whole picture) and keeps the higher.
+- X button on every blur; tray "Show scores on every picture" for diagnosing misses.
+- Known weak spot: the model is trained mostly on photo-style AI; illustrated/cartoon AI art scores lower.

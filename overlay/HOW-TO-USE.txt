@@ -1,4 +1,4 @@
-AI Slop Overlay, v0.4
+AI Slop Overlay, v0.5
 Lightly blurs pictures and videos that look AI-generated, anywhere on your screen.
 
 NEEDS: Windows 10 (version 2004 or newer) or Windows 11, 64-bit.
@@ -15,7 +15,11 @@ CONTROLS
 - Ctrl+Alt+B also turns it on and off.
 - Right-click the tray icon (bottom-right of the taskbar) for blur strength, sensitivity, videos,
   "Turn off during games", the log folder, and Quit.
-- Click "Likely AI · N% · show" on a blurred picture to see it clearly.
+- Every blurred picture has an X in its top-right corner: click it to remove that blur.
+  (Clicking "Likely AI · N% · show" does the same.)
+- Tray > "Show scores on every picture" puts a small grey score on every picture it finds, blurred or not.
+  Handy when it misses one: no score means it didn't find the picture; a low score means the detector
+  didn't think it was AI. Tray > Sensitivity > Sensitive blurs from 50% instead of 65%.
 
 GAMES
 While a game is running, the overlay gets out of the way completely: it stops capturing the screen and

@@ -22,13 +22,35 @@ export async function createEngine(modelBytes, wasmBytes, log = () => {}) {
     name,
     /** Probability (0..1) that this picture is AI-generated. */
     async score(bitmap) {
-      const tensor = preprocess(bitmap);
-      const run = () => session.run({ [input]: tensor });
-      const res = await (queue = queue.then(run, run));
-      const logit = res[output].data[0];
-      return sigmoid(CFG.a * logit + CFG.b);
+      let best = 0;
+      for (const tensor of [preprocess(bitmap), preprocessWhole(bitmap)]) {
+        const run = () => session.run({ [input]: tensor });
+        const res = await (queue = queue.then(run, run));
+        best = Math.max(best, sigmoid(CFG.a * res[output].data[0] + CFG.b));
+      }
+      return best;
     },
   };
+}
+
+// the whole picture shrunk to fit 384x384, padded with the average color (catches what the middle crop cuts off)
+function preprocessWhole(bitmap) {
+  const s = CFG.inputSize, k = s / Math.max(bitmap.width, bitmap.height);
+  const w = Math.max(1, Math.round(bitmap.width * k)), h = Math.max(1, Math.round(bitmap.height * k));
+  const c = new OffscreenCanvas(s, s), g = c.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = 'rgb(124,116,104)'; g.fillRect(0, 0, s, s);
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.drawImage(bitmap, Math.floor((s - w) / 2), Math.floor((s - h) / 2), w, h);
+  return toTensor(g.getImageData(0, 0, s, s).data, s);
+}
+function toTensor(data, crop) {
+  const { mean, std } = CFG, n = crop * crop, out = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    out[i] = (data[i * 4] / 255 - mean[0]) / std[0];
+    out[n + i] = (data[i * 4 + 1] / 255 - mean[1]) / std[1];
+    out[2 * n + i] = (data[i * 4 + 2] / 255 - mean[2]) / std[2];
+  }
+  return new ort.Tensor('float32', out, [1, 3, crop, crop]);
 }
 
 // shortest edge -> 440, center crop 384, [0,1], ImageNet normalize, CHW float32 (mirrors training)
