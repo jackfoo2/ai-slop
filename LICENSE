@@ -1,0 +1,8 @@
+Copyright (c) 2026 Jack Hagman. All rights reserved.
+
+The code in this repository is not licensed for use, copying, modification or distribution
+without written permission, except for the third-party parts below, which keep their own licenses:
+
+- extension/: based on Detectra by ashhart, MIT license (see extension/LICENSE).
+- The Detectra v3 detection model (downloaded at runtime), MIT license.
+- Electron and ONNX Runtime Web, MIT licenses.

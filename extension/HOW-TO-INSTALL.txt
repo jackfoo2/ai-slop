@@ -1,0 +1,34 @@
+AI Slop Detector, v0.2.0
+Lightly blurs images and videos that look AI-generated while you scroll, so you notice them.
+Click the "Likely AI · N% · show" chip to see one clearly; hover the chip to see why it was flagged.
+Everything runs on your computer. The only download is the detection model, once, on first run.
+
+INSTALL (Chrome, Edge or Brave on a computer)
+1. Move this "ai-slop-detector" folder somewhere it can stay, like Documents.
+   Chrome runs it from this folder, so deleting the folder removes the extension.
+2. In Chrome, open:  chrome://extensions
+3. Turn on "Developer mode" (switch at the top right).
+4. Click "Load unpacked" and choose this "ai-slop-detector" folder (the one with manifest.json in it).
+5. Pin it: click the puzzle-piece icon at the top right of Chrome, then the pin next to AI Slop Detector.
+6. Click its icon once. The first time, it downloads its detection model (about 44 MB).
+   The menu shows "downloading model", then "ready".
+
+SETTINGS (click the icon)
+- Blur likely AI: on or off.
+- Blur strength: Light (default), Medium, Strong. The more confident it is, the blurrier.
+- Sensitivity: Sensitive (flags at 50%), Balanced (65%, default), Strict (80%).
+- Badges: Flagged only (default) or Every image.
+- Check videos: on (default) or off.
+- "Disable on this site" turns it off for the site you're on.
+
+GOOD TO KNOW
+- It's a strong guess, not proof. Some AI images will get through and some real ones will get flagged.
+- It skips small things like profile pictures and emoji (anything shown under 100 pixels).
+- Videos are checked every 1.5 seconds while they're on screen, and flagged on the average of a few frames.
+- Text posts aren't checked.
+- Chrome may sometimes warn about "developer mode extensions" when it starts. That's normal for
+  extensions installed this way; keep it.
+
+Based on Detectra by ashhart (https://github.com/ashhart/Detectra), MIT license, see LICENSE.
+Changes: confidence-scaled light blur, chip instead of duplicate badges, badges on flagged items only,
+video checking, skipping small images, and a settings menu.

@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Social</title>
+<style>
+*{box-sizing:border-box} body{margin:0;font:15px/1.4 system-ui,Segoe UI,sans-serif;background:#fff;color:#0f1419}
+.top{position:sticky;top:0;z-index:5;height:54px;background:rgba(255,255,255,.96);border-bottom:1px solid #eee;display:flex;align-items:center;padding:0 20px;font-weight:700;font-size:19px}
+.wrap{display:grid;grid-template-columns:240px 600px 300px;gap:0;justify-content:center}
+.nav{padding:16px;position:sticky;top:54px;height:calc(100vh - 54px)} .nav div{padding:12px 8px;font-size:18px} .nav b{display:inline-block;width:26px;height:26px;border-radius:6px;background:#0f1419;margin-right:12px;vertical-align:-6px}
+.feed{border-left:1px solid #eee;border-right:1px solid #eee}
+.post{display:grid;grid-template-columns:48px 1fr;gap:12px;padding:12px 16px;border-bottom:1px solid #eee}
+.av{width:48px;height:48px;border-radius:50%} .name{font-weight:700} .handle{color:#536471;font-weight:400}
+.media{margin-top:10px;width:520px;height:auto;border-radius:16px;border:1px solid #e6e6e6;display:block}
+.acts{display:flex;justify-content:space-between;color:#536471;margin-top:8px;width:420px;font-size:13px}
+.side{padding:16px} .card{background:#f7f9f9;border-radius:16px;padding:12px 16px;margin-bottom:16px} .card div{padding:8px 0;border-bottom:1px solid #eee;font-size:14px}
+</style></head><body>
+<div class="top">Home</div>
+<div class="wrap">
+<div class="nav"><div><b></b>Home</div><div><b></b>Explore</div><div><b></b>Notifications</div><div><b></b>Messages</div><div><b></b>Bookmarks</div><div><b></b>Profile</div></div>
+<div class="feed" id="feed"></div>
+<div class="side"><div class="card"><b>What's happening</b><div>Robots in apartments<br><small>12.4K posts</small></div><div>#CookingWithBo<br><small>3,102 posts</small></div><div>Minneapolis weather<br><small>Trending</small></div><div>Cat facts<br><small>8,812 posts</small></div></div></div>
+</div>
+<script>
+const posts = [
+ ['Ana Lopez','@ana','Sunset from the lake tonight. Unreal colors.','landscape.jpg'],
+ ['Dev Patel','@devp','Ok but this cannot be a real photo right?','portrait.jpg'],
+ ['Kitchen Corner','@kc','Made this for the family. Recipe in replies.','food.jpg'],
+ ['meme lord','@memes','accurate','meme.jpg'],
+ ['Studio Fern','@fern','new piece, made over the weekend','illustration.jpg'],
+ ['Sam R','@samr','lol this post','textshot.png'],
+ ['Clip Channel','@clips','watch this','VIDEO'],
+ ['Ana Lopez','@ana','one more from the trip','landscape.jpg'],
+];
+const feed = document.getElementById('feed');
+posts.forEach(([n,h,t,m],i)=>{
+  const media = m==='VIDEO' ? `<video class="media" src="clip.webm" muted loop autoplay playsinline></video>` : `<img class="media" src="${m}">`;
+  feed.insertAdjacentHTML('beforeend', `<div class="post"><img class="av" src="avatar${i%6}.jpg"><div><div class="name">${n} <span class="handle">${h} · ${i+1}h</span></div><div>${t}</div>${media}<div class="acts"><span>💬 ${12+i*7}</span><span>🔁 ${3+i}</span><span>♥ ${40+i*31}</span><span>📊 ${1+i}K</span></div></div></div>`);
+});
+</script></body></html>
