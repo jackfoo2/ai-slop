@@ -120,9 +120,15 @@ function detect(img) {
   const found = findRegions(img, { block: Math.max(8, Math.round(8 * k)), minW: 120 * k, minH: 90 * k });
   const seen = new Set();
   for (const r of found) {
-    const hit = tracker.boxes.find((b) => iou(b, r) > 0.3);
-    if (hit) { snapTo(hit, r); hit.miss = 0; seen.add(hit.id); continue; }
+    const inter = (b) => Math.max(0, Math.min(b.x + b.w, r.x + r.w) - Math.max(b.x, r.x)) * Math.max(0, Math.min(b.y + b.h, r.y + r.h) - Math.max(b.y, r.y));
+    const hit = tracker.boxes.find((b) => iou(b, r) > 0.3) || tracker.boxes.find((b) => inter(b) > 0.8 * b.w * b.h);
+    if (hit) {
+      const ratio = (r.w * r.h) / (hit.w * hit.h);
+      if (ratio > 0.7 && ratio < 1.4) snapTo(hit, r); // a much bigger shape around it (hover highlight): keep the picture's own box
+      hit.miss = 0; hit.thumb = thumbOf(img, hit); seen.add(hit.id); continue;
+    }
     const b = tracker.add({ ...r, p: null, history: [], sig: signature(img, r) });
+    b.thumb = thumbOf(img, b);
     const known = cache.get(b.sig);
     seen.add(b.id);
     const back = known ? null : recall(r);
@@ -131,7 +137,11 @@ function detect(img) {
     else queueScore(b);
   }
   // a picture that two re-scans in a row can't find is gone: drop it (and its blur) right away
-  for (const b of tracker.boxes) if (!seen.has(b.id)) b.miss = (b.miss || 0) + 1;
+  for (const b of tracker.boxes) {
+    if (seen.has(b.id)) continue;
+    if (b.thumb && sameContent(img, b)) { b.miss = 0; continue; } // still there, just not recognized this time (hover, selection...)
+    b.miss = (b.miss || 0) + 1;
+  }
   tracker.boxes = tracker.boxes.filter((b) => (b.miss || 0) < 2);
   // pictures that have gone away take their chips with them
   for (const [id, el] of chips) if (!tracker.boxes.some((b) => b.id === id)) { el.remove(); chips.delete(id); }
@@ -144,6 +154,22 @@ function snapTo(b, r) {
   if (Math.abs(dBot) <= 6 && dTop > 8) { b.clipTop = r.y; b.clipBot = null; if (Math.abs(dBot) > 2) b.y += dBot; }            // covered at the top
   else if (Math.abs(dTop) <= 6 && dBot < -8) { b.clipBot = r.y + r.h; b.clipTop = null; if (Math.abs(dTop) > 2) b.y += dTop; } // covered at the bottom
   else { b.clipTop = b.clipBot = null; if (Math.abs(dTop) > 2 || Math.abs(dBot) > 2) { b.y = r.y; b.h = r.h; } }
+}
+
+/** An 8x8 gray thumbnail of what's inside a box right now, to tell "same picture" from "something else". */
+function thumbOf(img, b) {
+  const { data, width: W, height: H } = img, t = new Float32Array(64);
+  for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) {
+    const x = Math.min(W - 1, Math.max(0, Math.floor(b.x + ((i + 0.5) * b.w) / 8))), y = Math.min(H - 1, Math.max(0, Math.floor(b.y + ((j + 0.5) * b.h) / 8))), q = (y * W + x) * 4;
+    t[j * 8 + i] = (data[q] * 77 + data[q + 1] * 150 + data[q + 2] * 29) >> 8;
+  }
+  return t;
+}
+function sameContent(img, b) {
+  if (b.y < 0 || b.y + b.h > img.height) return false; // partly off screen: let the normal rules decide
+  const now = thumbOf(img, b); let d = 0;
+  for (let i = 0; i < 64; i++) d += Math.abs(now[i] - b.thumb[i]);
+  return d / 64 < 14;
 }
 
 /** A tiny fingerprint of a picture's content, so scrolling away and back doesn't rescore it. */

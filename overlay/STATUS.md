@@ -75,3 +75,11 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
   of the screen, works between pictures; exact to the pixel over 2,550 px of recorded scrolling). Each
   scored picture is remembered by its position on the page; when it comes back it re-blurs at once and is
   re-checked a second later. Tested: down 600 px and back, all re-blurred.
+
+## v0.7 (Jack: folder of AI pictures as extra-large icons: only ~2 of 8 per row blurred; hover clears the blur)
+- Packed pictures (thumbnail grids, galleries) merged into one blob. Now each blob is cut apart wherever a
+  clean full-height or full-width strip of background runs through it. Explorer-style test page: old finder
+  3 of 7 per row, new finder 7 of 7 (21 of 21).
+- Hover highlight (light blue behind a thumbnail) made the picture unrecognizable to re-scans, which then
+  dropped it. Now a bigger shape around a known picture counts as that picture, and a blur is only dropped
+  if the pixels inside it actually changed. Tested: highlight held on two thumbnails, blurs stayed.

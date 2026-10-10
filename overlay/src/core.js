@@ -44,15 +44,47 @@ export function findRegions(img, opt = {}) {
   const m = erode(dilate(mask, bw, bh, 1), bw, bh, 1);  // close pinholes (white bits inside photos)
   const boxes = [];
   for (const c of components(m, bw, bh)) {
-    let b = { x: c.x0 * B, y: c.y0 * B, w: (c.x1 - c.x0 + 1) * B, h: (c.y1 - c.y0 + 1) * B };
-    const fill = c.n / ((c.x1 - c.x0 + 1) * (c.y1 - c.y0 + 1));
-    if (b.w < minW || b.h < minH || fill < 0.7) continue;
-    b = refineEdges(img, b, B, isBg);
-    if (b.w < minW || b.h < minH) continue;
-    if (!varied(img, b)) continue; // flat panels and buttons aren't pictures
-    boxes.push(b);
+    const whole = { x: c.x0 * B, y: c.y0 * B, w: (c.x1 - c.x0 + 1) * B, h: (c.y1 - c.y0 + 1) * B };
+    if (whole.w < minW || whole.h < minH) continue;
+    // pictures packed close together (galleries, folders of thumbnails) can blur into one blob:
+    // cut it apart wherever a clean strip of background runs all the way through
+    for (const part of xyCut(img, whole, isBg, 0)) {
+      if (part.w < minW || part.h < minH) continue;
+      if (blockFill(m, bw, part, B) < 0.7) continue;
+      const b = refineEdges(img, part, B, isBg);
+      if (b.w < minW || b.h < minH) continue;
+      if (!varied(img, b)) continue; // flat panels and buttons aren't pictures
+      boxes.push(b);
+    }
   }
   return boxes;
+}
+
+/** Split a box at full-height or full-width strips of background (at least 3 px), recursively. */
+function xyCut(img, b, isBg, depth) {
+  if (depth > 8) return [b];
+  const W = img.width;
+  const colFrac = (x) => { let nb = 0, n = 0; for (let y = b.y; y < b.y + b.h; y += 3) { n++; if (isBg((y * W + x) * 4)) nb++; } return nb / n; };
+  const rowFrac = (y) => { let nb = 0, n = 0; for (let x = b.x; x < b.x + b.w; x += 3) { n++; if (isBg((y * W + x) * 4)) nb++; } return nb / n; };
+  const v = findGap(b.x, b.x + b.w, colFrac);
+  if (v) return [...xyCut(img, { x: b.x, y: b.y, w: v.start - b.x, h: b.h }, isBg, depth + 1), ...xyCut(img, { x: v.end, y: b.y, w: b.x + b.w - v.end, h: b.h }, isBg, depth + 1)];
+  const h = findGap(b.y, b.y + b.h, rowFrac);
+  if (h) return [...xyCut(img, { x: b.x, y: b.y, w: b.w, h: h.start - b.y }, isBg, depth + 1), ...xyCut(img, { x: b.x, y: h.end, w: b.w, h: b.y + b.h - h.end }, isBg, depth + 1)];
+  return [b];
+}
+function findGap(lo, hi, frac, margin = 40) {
+  let run = -1;
+  for (let v = lo + margin; v < hi - margin; v++) {
+    if (frac(v) >= 0.85) { if (run < 0) run = v; }
+    else { if (run >= 0 && v - run >= 3) return { start: run, end: v }; run = -1; }
+  }
+  return null;
+}
+function blockFill(m, bw, b, B) {
+  const x0 = Math.floor(b.x / B), x1 = Math.ceil((b.x + b.w) / B), y0 = Math.floor(b.y / B), y1 = Math.ceil((b.y + b.h) / B);
+  let n = 0, t = 0;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { t++; if (m[y * bw + x]) n++; }
+  return t ? n / t : 0;
 }
 
 function varied(img, b) {
