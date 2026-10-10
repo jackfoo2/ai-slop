@@ -600,7 +600,7 @@ async function sendFeedback() {
   const bytes = await new Promise((res) => c.toBlob(async (bl) => res(bl ? await bl.arrayBuffer() : null), 'image/jpeg', 0.85));
   // 2) work out what it means: the phrase reader first, then the small language model for anything else
   let action = readPhrases(text), how = 'phrases';
-  if (!action) { showToast('Reading your feedback…', null, 20000); try { action = await slop.llmRead(text); how = 'model'; } catch (e) { slop.log('feedback model error', String(e?.message || e)); } }
+  if (!action) { showToast('Reading your feedback…', null, 600000); try { action = await llmRead(text); how = 'model'; } catch (e) { how = 'model unavailable'; slop.log('feedback model error', String(e?.message || e)); } }
   action = cleanAction(action);
   const app = await slop.foregroundApp().catch(() => null);
   slop.feedback({ text, action, how, verdictBefore: isBlurred(b) ? 'blurred' : 'not blurred', score: b.p == null ? null : +b.p.toFixed(4), text_hit: b.textHit || null, fp: b.fp || null, app }, bytes);
@@ -620,6 +620,21 @@ async function applyFeedback(a, b, app) {
   if (a.action === 'note') return null;
   const token = await slop.applySetting(a.action, a.direction, app); // settings changes live in the main process
   return token ? () => slop.undoSetting(token) : null;
+}
+// the small language model, on its own thread, started the first time a sentence needs it
+let llm = null, llmN = 0; const llmWait = new Map();
+function llmRead(text) {
+  if (!llm) {
+    llm = new Worker('llm-worker.js');
+    llm.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'progress') showToast(`Getting the feedback reader ready (one-time download, about 480 MB): ${m.pct}%`, null, 600000);
+      else if (m.type === 'ready') { slop.log('feedback reader ready', m.device); showToast('Reading your feedback…', null, 60000); }
+      else if (m.type === 'result') { const w = llmWait.get(m.id); llmWait.delete(m.id); if (!w) return; if (m.error) w[1](new Error(m.error)); else { slop.log('feedback reader said', m.raw); w[0](m.action); } }
+    };
+    llm.onerror = (e) => { slop.log('feedback reader failed to start', e.message || ''); for (const [, w] of llmWait) w[1](new Error('reader failed')); llmWait.clear(); llm = null; };
+  }
+  return new Promise((ok, bad) => { const id = ++llmN; llmWait.set(id, [ok, bad]); llm.postMessage({ id, text }); setTimeout(() => { if (llmWait.has(id)) { llmWait.delete(id); bad(new Error('reader timed out')); } }, 900000); });
 }
 let toastTimer = 0;
 function showToast(msg, undo, ms = 8000) {

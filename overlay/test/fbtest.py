@@ -39,6 +39,7 @@ async def main():
         print(f'"too many false alarms" -> {msg} | sensitivity {sens0} -> {sens1}')
         await ov.evaluate("document.querySelector('#toast .undo').click()"); await asyncio.sleep(1)
         print('Undo ->', await ov.evaluate("document.querySelector('#toast .msg').textContent"), '| sensitivity now', json.load(open(f'{UD}/settings.json'))['sensitivity'])
+        vis, msg = await say(1, 'the colors look weird to me'); await asyncio.sleep(6); print('"the colors look weird to me" (needs the model) ->', await ov.evaluate("document.querySelector('#toast .msg').textContent"))
         open('/tmp/fg_discord', 'w').write('1'); await asyncio.sleep(2.5)
         vis, msg = await say(1, 'stop blurring stuff in discord'); print(f'with Discord in front: "stop blurring stuff in discord" -> {msg} | offIn = {json.load(open(f"{UD}/settings.json")).get("offIn")}')
         await asyncio.sleep(4)
@@ -49,5 +50,6 @@ async def main():
         el.terminate(); await br.close()
     srv.terminate(); xvfb.terminate()
     fb = [json.loads(l) for l in open(f'{UD}/ratings/feedback.jsonl')]
+    print('log:', [l[25:150] for l in open('/tmp/slop15.log').read().splitlines() if 'feedback reader' in l or 'feedback model' in l][:6])
     print('saved feedback:', [(f['text'][:30], f['action']['action'], f['how'], f['file'] is not None) for f in fb])
 asyncio.run(main())

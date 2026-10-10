@@ -1,6 +1,10 @@
 // AI Slop Overlay — main process: the see-through window, screen capture permission, tray menu,
 // settings, the one-time model download, and a log file.
-const { app, BrowserWindow, screen, desktopCapturer, session, Tray, Menu, ipcMain, globalShortcut, nativeImage, shell, dialog } = require('electron');
+const { app, BrowserWindow, screen, desktopCapturer, session, Tray, Menu, ipcMain, globalShortcut, nativeImage, shell, dialog, protocol, net } = require('electron');
+const { pathToFileURL } = require('url');
+// the feedback reader's model files: served from this PC, downloaded once from the official repo
+protocol.registerSchemesAsPrivileged([{ scheme: 'slopmodels', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
+const LLM_REPO = 'onnx-community/Qwen2.5-0.5B-Instruct';
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 
 const MODEL = {
@@ -120,7 +124,7 @@ ipcMain.handle('undo-setting', (_e, token) => {
   for (const k of ['sensitivity', 'strength', 'minScale', 'offIn']) if (JSON.stringify(settings[k]) !== JSON.stringify(before[k])) setSetting(k, before[k]);
   undos.delete(token); return true;
 });
-ipcMain.handle('llm-read', async () => { throw new Error('language model not set up yet'); }); // replaced below when the model is in
+
 // ---- ratings: each + / − saved on this PC: a small copy of the picture, its scores, and your call
 const ratingsDir = () => path.join(app.getPath('userData'), 'ratings');
 const ratings = { n: 0, right: 0, list: [] };
@@ -246,6 +250,26 @@ app.whenReady().then(() => {
   createOverlay();
   makeDesktopShortcut();
   startGameWatch();
+  protocol.handle('slopmodels', async (req) => {
+    const rel = decodeURIComponent(new URL(req.url).pathname).replace(/^\/+/, '');
+    if (!rel.startsWith(LLM_REPO + '/') || rel.includes('..')) return new Response('not allowed', { status: 403 });
+    const file = path.join(app.getPath('userData'), 'llm', rel);
+    if (!fs.existsSync(file)) {
+      const url = `https://huggingface.co/${LLM_REPO}/resolve/main/${rel.slice(LLM_REPO.length + 1)}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) { log('feedback reader file missing', rel, res.status); return new Response('missing', { status: 404 }); }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const tmp = file + '.part', out = fs.createWriteStream(tmp);
+        const total = Number(res.headers.get('content-length')) || 0; let got = 0, lastPct = -1;
+        for await (const c of res.body) { out.write(Buffer.from(c)); got += c.length; const pct = total ? Math.floor((100 * got) / total) : 0; if (total > 5e6 && pct !== lastPct && pct % 10 === 0) { lastPct = pct; log('feedback reader download', rel, pct + '%'); } }
+        await new Promise((r) => out.end(r));
+        fs.renameSync(tmp, file);
+        log('feedback reader file saved', rel, got);
+      } catch (e) { log('feedback reader download failed', rel, String(e?.message || e)); return new Response('download failed', { status: 502 }); }
+    }
+    return net.fetch(pathToFileURL(file).toString());
+  });
   if (process.env.SLOP_CHECK_FILES) setTimeout(() => checkFiles(process.env.SLOP_CHECK_FILES.split('|')), 9000); // tests only
 });
 

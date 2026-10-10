@@ -175,3 +175,16 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Tested end to end: "real photo" unblurred it; "too many false alarms" Balanced->Strict, Undo restored; "stop in
   Discord" with Discord in front switched off until Discord left the front.
 - Stage 2 (in progress): a small local language model for sentences the phrase reader can't place.
+
+## v0.15 stage 2: the small language model
+- src/llm-worker.js runs Qwen2.5-0.5B-Instruct (onnx-community, Apache-2.0) with Transformers.js 3.8.1 on its own
+  thread: graphics card (q4f16, ~483 MB) or processor (q4). Started only when the phrase reader can't place a sentence.
+- Model files come through the app's own "slopmodels:" address: main downloads each file once from
+  huggingface.co/onnx-community/Qwen2.5-0.5B-Instruct (only that repo, no "..") into the app's data folder (llm/),
+  then serves it from disk. (A deliberately backdoored copy of this model exists on Hugging Face as a security demo;
+  only the official repo is allowed.)
+- Prompt: the action menu plus a few examples; reply must be one JSON action; checked against the menu, anything
+  else becomes a note. Download progress shows in the confirmation box; first use waits for the download.
+- Tested here: the reader thread starts, requests tokenizer/config through slopmodels:, main tries the official repo
+  (blocked in this workspace), and the sentence falls back to a note without errors. NOT tested: the model actually
+  answering (needs the download, so Jack's PC is the first real run).
