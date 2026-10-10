@@ -128,3 +128,19 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Test: Explorer-style folder with a dark Task Manager stand-in: blur on the window 61% -> 0.1% while open
   (also after scrolling), fully restored after closing. Hover, grid scrolling, labels, wallpaper, cut-outs and
   feed tests all unchanged.
+
+## v0.12 (Jack: cap CPU around 20%, move load to the graphics card)
+- Still screen: a 64x36 copy scaled on the graphics card shows whether anything changed; if not, all the work is
+  skipped (a full check still runs every 2 s). The quarter-size tracking copy is also scaled on the graphics card,
+  from the same frame as the full-detail copy (taking it from the live video gave mismatched frames and broke the
+  scroll measurement: 53 px drift; fixed, exact again).
+- CPU limit (tray: 10/20/35%/none, default 20%): the main process sums the app's CPU every 2 s (as Task Manager
+  shows it) and moves between 5 levels: frames per second 30/20/15/10/6, re-scans every 150 ms to 1.2 s, text
+  reading on / only when the screen is still / off, two views per picture or one. Steps down quickly, up slowly.
+- Still pictures are scored twice and then left alone; only videos keep getting re-checked. Pictures are never
+  scored while something covers them (a covered score had dragged one picture's average under the line).
+  Unscored pictures go before second looks.
+- Tests: still screen mostly skipped, governor steps 0->4 at faked 50% and back at 5%; Task Manager (0.0-0.3% on
+  the window, all back after), hover, grid scrolling, labels, wallpaper all pass.
+- Already on the graphics card when WebGPU works: the AI model, capture, drawing the blur. Text reading has no
+  graphics-card version; at higher CPU levels it only runs while the screen is still, or not at all.

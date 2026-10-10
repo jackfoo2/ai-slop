@@ -13,7 +13,7 @@ async def main():
         br = await p.chromium.launch(headless=False, env=env, args=['--kiosk', '--window-position=0,0', '--window-size=1920,1080'])
         pg = await br.new_page(viewport={'width': 1920, 'height': 1080}); await pg.goto('http://localhost:8739/labels.html'); await pg.wait_for_timeout(1000)
         el = subprocess.Popen(['/home/claude/overlay/dl/electron-linux/electron', '--no-sandbox', '--user-data-dir=/tmp/slop-ud9', '--remote-debugging-port=9341', '/home/claude/ai-slop/overlay/app'],
-                              env=dict(env, SLOP_MODEL='/home/claude/overlay/standin-model.onnx', SLOP_HIDDEN='1', SLOP_DEBUG='1'), stdout=open('/tmp/slop9.log', 'w'), stderr=subprocess.STDOUT)
+                              env=dict(env, SLOP_MODEL='/home/claude/overlay/standin-model.onnx', SLOP_HIDDEN='1', SLOP_FAKE_CPU_FILE='/tmp/fakecpu5', SLOP_DEBUG='1'), stdout=open('/tmp/slop9.log', 'w'), stderr=subprocess.STDOUT)
         cdp = None
         for _ in range(30):
             await asyncio.sleep(1)

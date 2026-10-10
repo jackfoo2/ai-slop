@@ -6,6 +6,16 @@ import { startOcr, readText, matchAiText } from './ocr.js';
 
 const THRESH = { sensitive: 0.5, balanced: 0.65, strict: 0.8 };
 const BLUR = { light: [3, 9], medium: [6, 16], strong: [10, 24] }; // CSS px at the line -> at 100%
+// CPU budget: the main process measures CPU use and moves between these levels to stay under the limit
+const LEVELS = [
+  { fps: 30, detect: 150, ocr: 'on', views: 2 },
+  { fps: 20, detect: 250, ocr: 'on', views: 2 },
+  { fps: 15, detect: 400, ocr: 'idle', views: 2 },
+  { fps: 10, detect: 700, ocr: 'idle', views: 1 },
+  { fps: 6, detect: 1200, ocr: 'off', views: 1 },
+];
+let level = 0;
+const L = () => LEVELS[Math.max(0, Math.min(LEVELS.length - 1, level))];
 const DETECT_EVERY = 150, MAX_PROC_W = 1280, RESCORE_FLAGGED = 8000, RESCORE_CLEAN = 2500, LEAD_FRAMES = 1;
 
 const slop = window.slop;
@@ -45,6 +55,7 @@ const blurPx = (p) => { const t = thr(), [lo, hi] = BLUR[settings.strength] || B
 async function start() {
   try {
     settings = await slop.settings();
+    level = (await slop.budget()) || 0; slop.onBudget((lv) => { level = lv; });
     slop.onSettings((s) => { settings = s; if (s.paused) clearAll(); });
     const disp = await slop.display();
     slop.status({ model: 'loading' });
@@ -75,7 +86,7 @@ function startEngine(model, wasm) {
       const m = e.data;
       if (m.type === 'log') slop.log(m.text);
       else if (m.type === 'error') reject(new Error(m.error));
-      else if (m.type === 'ready') resolve({ name: m.name, score: (bitmap) => new Promise((ok, bad) => { const id = ++nid; pending.set(id, [ok, bad]); w.postMessage({ type: 'score', id, bitmap }, [bitmap]); }) });
+      else if (m.type === 'ready') resolve({ name: m.name, score: (bitmap, views = 2) => new Promise((ok, bad) => { const id = ++nid; pending.set(id, [ok, bad]); w.postMessage({ type: 'score', id, bitmap, views }, [bitmap]); }) });
       else if (m.type === 'score') { const [ok, bad] = pending.get(m.id) || []; pending.delete(m.id); if (m.error) bad?.(new Error(m.error)); else ok?.(m.p); }
     };
     w.postMessage({ type: 'init', model, wasm }, [model, wasm]);
@@ -95,16 +106,22 @@ function step() {
   const W = Math.round(video.videoWidth * f), H = Math.round(video.videoHeight * f);
   if (frame.width !== W || frame.height !== H) { frame.width = W; frame.height = H; view.width = W; view.height = H; tracker = new Tracker({ searchY: 60 }); }
   if (settings.paused) { clearAll(); return; }
+  const t0f = performance.now();
+  if (t0f - lastProc < 1000 / L().fps - 2) { skipped++; return; } // frame-rate cap for this CPU level
+  lastProc = t0f;
+  const changed = screenChanged();
+  if (changed) stillSince = t0f;
+  const moving = tracker.boxes.some((b) => Math.abs(b.vpm || 0) > 0.01);
+  if (!changed && !moving && t0f - lastFull < 2000) { idle++; for (const b of tracker.boxes) b.vpm = 0; return; } // still screen: nothing to do
+  lastFull = t0f; processed++;
   let t = performance.now(); const mark = (k) => { const n = performance.now(); perf.parts[k] = (perf.parts[k] || 0) + n - t; t = n; };
   fctx.drawImage(video, 0, 0, W, H); mark('draw');
   const img = fctx.getImageData(0, 0, W, H); mark('read');
-  const gc = grayDown(img, 4), gf = grayDown(img, 1); mark('gray');
+  const gc = coarseGray(W, H), gf = grayDown(img, 1); mark('gray');
   tracker.update(gc, gf); scrollAcc += tracker.pageShift || 0; mark('track');
   const now = performance.now();
   checkCovered(img); // first: which pictures has something been put on top of?
-  if (now - lastDetect > DETECT_EVERY) { lastDetect = now; detect(img); mark('detect'); }
-  for (const b of tracker.boxes) if (b.p == null ? !b.scoring : (b.nextScore && now > b.nextScore)) queueScore(b); // unscored pictures retry every frame
-  if (settings.readText && !ocrBusy) { const b = tracker.boxes.find((x) => !x.ocrDone && Math.abs(x.vpm || 0) < 0.02 && x.y >= 0 && x.y + x.h <= frame.height); if (b) queueOcr(b); }
+  if (now - lastDetect > L().detect) { lastDetect = now; detect(img); mark('detect'); }
   rememberDeparted(now);
   // how fast each box is moving, per millisecond, so drawing can project it forward between captures
   const dt = Math.max(8, Math.min(200, frameAt - prevFrameAt || 33));
@@ -133,7 +150,7 @@ function detect(img) {
       if (ratio > 0.7 && ratio < 1.4) snapTo(hit, r);
       // the picture grew back (a window over part of it closed): take the bigger outline if the extra is more picture,
       // not a flat hover highlight or a file name
-      else if (ratio >= 1.4 && inter(hit) > 0.9 * hit.w * hit.h && morePicture(img, r, hit)) { hit.x = r.x; hit.y = r.y; hit.w = r.w; hit.h = r.h; hit.cells = null; hit.covered = false; hit.thumb = thumbOf(img, hit); }
+      else if (ratio >= 1.4 && inter(hit) > 0.9 * hit.w * hit.h && morePicture(img, r, hit)) { hit.x = r.x; hit.y = r.y; hit.w = r.w; hit.h = r.h; hit.cells = null; hit.covered = false; hit.thumb = thumbOf(img, hit); hit.history = []; hit.nextScore = performance.now(); } // re-score the whole picture now
       const same = !hit.thumb || sameContent(img, hit), match = iou(hit, r);
       const still = Math.abs(hit.vpm || 0) < 0.02;
       if (!same && still && match < 0.9) { hit.miss = 9; } // its outline really changed (covered, or now only partly showing): replace it with what's there now
@@ -272,6 +289,42 @@ function signature(img, r) {
 }
 
 let ocrBusy = false, ocrMs = 0, ocrN = 0;
+let lastProc = 0, lastFull = 0, stillSince = performance.now(), processed = 0, idle = 0, skipped = 0;
+// a 64x36 copy, scaled on the graphics card: has anything on screen changed since last frame?
+const tiny = document.createElement('canvas'); tiny.width = 64; tiny.height = 36;
+const tctx = tiny.getContext('2d', { willReadFrequently: true }); let prevTiny = null;
+function screenChanged() {
+  tctx.drawImage(video, 0, 0, 64, 36);
+  const d = tctx.getImageData(0, 0, 64, 36).data; let diff = 0;
+  if (prevTiny) for (let i = 0; i < d.length; i += 4) diff += Math.abs(d[i] - prevTiny[i]) + Math.abs(d[i + 1] - prevTiny[i + 1]) + Math.abs(d[i + 2] - prevTiny[i + 2]);
+  const changed = !prevTiny || diff / (64 * 36) > 1.5; // tiny changes (the mouse pointer) don't count
+  prevTiny = d;
+  return changed;
+}
+// the quarter-size gray copy for coarse tracking, scaled on the graphics card instead of in JavaScript
+const coarse = document.createElement('canvas'), cgctx = coarse.getContext('2d', { willReadFrequently: true });
+function coarseGray(W, H) {
+  const w = Math.floor(W / 4), h = Math.floor(H / 4);
+  if (coarse.width !== w || coarse.height !== h) { coarse.width = w; coarse.height = h; }
+  cgctx.drawImage(frame, 0, 0, w, h); // from the same frame as the full-detail copy, never a newer one
+  const d = cgctx.getImageData(0, 0, w, h).data, g = new Uint8Array(w * h);
+  for (let i = 0, j = 0; j < w * h; i += 4, j++) g[j] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+  return { g, w, h, s: 4 };
+}
+// scoring and text reading: their own steady timer, independent of how often frames are processed
+setInterval(() => {
+  if (!engine || settings.paused) return;
+  const now = performance.now();
+  // never score a picture while something covers it (all or part): that would score the window on top
+  const ready = (b) => !b.covered && !b.cells;
+  const fresh = tracker.boxes.filter((b) => ready(b) && b.p == null && !b.scoring);
+  if (fresh.length) for (const b of fresh) queueScore(b);                                // first looks before second looks
+  else for (const b of tracker.boxes) if (ready(b) && b.p != null && b.nextScore && now > b.nextScore) queueScore(b);
+  const mode = L().ocr;
+  if (!settings.readText || ocrBusy || mode === 'off' || (mode === 'idle' && now - stillSince < 2000)) return;
+  const b = tracker.boxes.find((x) => !x.ocrDone && Math.abs(x.vpm || 0) < 0.02 && x.y >= 0 && x.y + x.h <= frame.height);
+  if (b) queueOcr(b);
+}, 200);
 /** Read the text inside a picture (top and bottom strips: watermarks) and around it (name row, caption,
  *  strip below: site labels and hashtags), from the full-quality capture, then decide. */
 async function queueOcr(b) {
@@ -324,11 +377,12 @@ function queueScore(b) {
   const w = Math.min(frame.width - x, Math.round(b.w)), h = Math.min(frame.height - y, Math.round(b.h));
   if (w < 32 || h < 32) { b.scoring = false; scoring--; return; }
   createImageBitmap(video, Math.round(x / f), Math.round(y / f), Math.round(w / f), Math.round(h / f))
-    .then((bmp) => engine.score(bmp))
+    .then((bmp) => engine.score(bmp, L().views))
     .then((p) => {
       b.history.push(p); if (b.history.length > 3) b.history.shift();
       b.p = b.history.reduce((a, c) => a + c, 0) / b.history.length;
-      b.nextScore = performance.now() + (b.p >= thr() ? RESCORE_FLAGGED : RESCORE_CLEAN);
+      // videos keep getting re-checked; a still picture is settled after two agreeing looks (saves CPU and graphics card)
+      b.nextScore = b.dynamic ? performance.now() + (b.p >= thr() ? RESCORE_FLAGGED : RESCORE_CLEAN) : b.history.length >= 2 ? Infinity : performance.now() + 1500;
       cache.set(b.sig, { ...(cache.get(b.sig) || {}), p: b.p, revealed: !!b.revealed });
     })
     .catch((e) => slop.log('score error', String(e?.message || e)))
@@ -413,7 +467,7 @@ window.__wallCheck = () => {
 };
 window.__slopDrawn = () => drawn.map((r) => r.map((v) => +(v / k).toFixed(1)));
 window.__slopUI = () => ({ ocrAvgMs: ocrN ? Math.round(ocrMs / ocrN) : null, texts: tracker.boxes.map((b) => ({ y: Math.round(b.y / k), done: !!b.ocrDone, hit: b.textHit, blurred: isBlurred(b) })), chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
-window.__slopState = () => ({ scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b), covered: !!b.covered, cellsOn: b.cells ? b.cells.reduce((a, c) => a + c, 0) : null, dynamic: !!b.dynamic, miss: b.miss || 0, lost: b.lost || 0 })) });
+window.__slopState = () => ({ scoringNow: scoring, level, processed, idle, skipped, scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b), covered: !!b.covered, cellsOn: b.cells ? b.cells.reduce((a, c) => a + c, 0) : null, dynamic: !!b.dynamic, miss: b.miss || 0, lost: b.lost || 0, isScoring: !!b.scoring, nextIn: b.nextScore ? Math.round(b.nextScore - performance.now()) : null, hist: (b.history || []).map((v) => +v.toFixed(2)) })) });
 // ---- the control bar (top-left): on/off and close
 const bar = document.getElementById('bar');
 function paintBar() {

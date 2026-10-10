@@ -7,7 +7,7 @@ const MODEL = {
   url: 'https://huggingface.co/Vontra/detectra-v1/resolve/d8709d3c39aa69ab862748badce0d4a06e90bf4c/model.onnx',
   sha256: '1414b9aafaa01a644ed706224973f09b53a1388282104409862df9893b1b962b',
 };
-const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true };
+const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true, cpuLimit: 20 };
 let settings = { ...DEFAULTS }, win = null, tray = null, gameReason = null, gameClearSince = 0, gameWatcher = null;
 let status = { model: 'starting', engine: null, flagged: 0, tracked: 0, fps: 0, error: null };
 
@@ -47,6 +47,24 @@ const toAB = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 ipcMain.handle('model', async () => { try { return toAB(await modelBytes()); } catch (e) { log('model error', String(e)); setStatus({ model: 'error', error: String(e.message || e) }); throw e; } });
 ipcMain.handle('wasm', () => toAB(fs.readFileSync(path.join(__dirname, 'vendor', 'ort', 'ort-wasm-simd-threaded.jsep.wasm'))));
 ipcMain.handle('settings', () => settings);
+// ---- CPU budget: measure the whole app's CPU (as Task Manager shows it) and step quality down or up
+let budgetLevel = 0, cpuAvg = 0, lastLevelChange = 0;
+ipcMain.handle('budget', () => budgetLevel);
+setInterval(() => {
+  let total;
+  if (process.env.SLOP_FAKE_CPU_FILE) { try { total = Number(fs.readFileSync(process.env.SLOP_FAKE_CPU_FILE, 'utf8')); } catch { total = 0; } } // tests only
+  else { const m = app.getAppMetrics(); total = m.reduce((a, p) => a + ((p.cpu && p.cpu.percentCPUUsage) || 0), 0) / require('os').cpus().length; }
+  cpuAvg = cpuAvg ? cpuAvg * 0.6 + total * 0.4 : total;
+  const limit = settings.cpuLimit, now = Date.now(); let next = budgetLevel;
+  if (limit && cpuAvg > limit && budgetLevel < 4 && now - lastLevelChange > 3000) next++;            // over: step down quickly
+  else if ((!limit || cpuAvg < limit * 0.6) && budgetLevel > 0 && now - lastLevelChange > 8000) next--; // lots of room: step back up slowly
+  if (next !== budgetLevel) {
+    budgetLevel = next; lastLevelChange = now;
+    if (win && !win.isDestroyed()) win.webContents.send('budget', budgetLevel);
+    log('cpu', { cpu: +cpuAvg.toFixed(1), limit, level: budgetLevel, cores: require('os').cpus().length });
+  }
+  const shown = Math.round(cpuAvg); if (shown !== status.cpu) { status.cpu = shown; buildMenu(); }
+}, 2000);
 // the desktop wallpaper: the image Windows is showing, and how it's fitted to the screen
 ipcMain.handle('wallpaper', () => {
   try {
@@ -97,6 +115,7 @@ function buildMenu() {
     { label: 'Blur strength', submenu: radio('strength', [['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']]) },
     { label: 'Sensitivity', submenu: radio('sensitivity', [['sensitive', 'Sensitive (flags at 50%)'], ['balanced', 'Balanced (65%)'], ['strict', 'Strict (80%)']]) },
     { label: 'Check videos', type: 'checkbox', checked: settings.video, click: () => setSetting('video', !settings.video) },
+    { label: `CPU limit${status.cpu != null ? ` (now ${status.cpu}%)` : ''}`, submenu: [[10, '10%'], [20, '20%'], [35, '35%'], [0, 'No limit']].map(([v, l]) => ({ label: l, type: 'radio', checked: settings.cpuLimit === v, click: () => setSetting('cpuLimit', v) })) },
     { label: 'Turn off during games', type: 'checkbox', checked: settings.gameGuard, click: () => setSetting('gameGuard', !settings.gameGuard) },
     { label: 'Ignore my desktop wallpaper', type: 'checkbox', checked: settings.ignoreWallpaper, click: () => setSetting('ignoreWallpaper', !settings.ignoreWallpaper) },
     { label: 'Read labels and watermarks', type: 'checkbox', checked: settings.readText, click: () => setSetting('readText', !settings.readText) },

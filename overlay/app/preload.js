@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('slop', {
   wasm: () => ipcRenderer.invoke('wasm'),
   settings: () => ipcRenderer.invoke('settings'),
   wallpaper: () => ipcRenderer.invoke('wallpaper'),
+  budget: () => ipcRenderer.invoke('budget'),
+  onBudget: (cb) => ipcRenderer.on('budget', (_e, lv) => cb(lv)),
   display: () => ipcRenderer.invoke('display'),
   onSettings: (cb) => ipcRenderer.on('settings', (_e, s) => cb(s)),
   clickable: (on) => ipcRenderer.send('clickable', on),

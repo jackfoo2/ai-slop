@@ -13,7 +13,7 @@ async def main():
         br = await p.chromium.launch(headless=False, env=env, args=['--kiosk', '--window-position=0,0', '--window-size=1920,1080'])
         pg = await br.new_page(viewport={'width': 1920, 'height': 1080}); await pg.goto('http://localhost:8737/explorer.html'); await pg.wait_for_timeout(1000)
         el = subprocess.Popen(['/home/claude/overlay/dl/electron-linux/electron', '--no-sandbox', '--user-data-dir=/tmp/slop-ud8', '--remote-debugging-port=9340', '/home/claude/ai-slop/overlay/app'],
-                              env=dict(env, SLOP_MODEL='/home/claude/overlay/standin-model.onnx', SLOP_HIDDEN='1'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                              env=dict(env, SLOP_MODEL='/home/claude/overlay/standin-model.onnx', SLOP_HIDDEN='1', SLOP_FAKE_CPU_FILE='/tmp/fakecpu5'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cdp = None
         for _ in range(30):
             await asyncio.sleep(1)

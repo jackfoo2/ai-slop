@@ -21,9 +21,9 @@ export async function createEngine(modelBytes, wasmBytes, log = () => {}) {
   return {
     name,
     /** Probability (0..1) that this picture is AI-generated. */
-    async score(bitmap) {
+    async score(bitmap, views = 2) {
       let best = 0;
-      for (const tensor of [preprocess(bitmap), preprocessWhole(bitmap)]) {
+      for (const tensor of views > 1 ? [preprocess(bitmap), preprocessWhole(bitmap)] : [preprocess(bitmap)]) {
         const run = () => session.run({ [input]: tensor });
         const res = await (queue = queue.then(run, run));
         best = Math.max(best, sigmoid(CFG.a * res[output].data[0] + CFG.b));
