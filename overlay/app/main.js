@@ -1,13 +1,13 @@
 // AI Slop Overlay — main process: the see-through window, screen capture permission, tray menu,
 // settings, the one-time model download, and a log file.
-const { app, BrowserWindow, screen, desktopCapturer, session, Tray, Menu, ipcMain, globalShortcut, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, screen, desktopCapturer, session, Tray, Menu, ipcMain, globalShortcut, nativeImage, shell, dialog } = require('electron');
 const path = require('path'), fs = require('fs'), crypto = require('crypto');
 
 const MODEL = {
   url: 'https://huggingface.co/Vontra/detectra-v1/resolve/d8709d3c39aa69ab862748badce0d4a06e90bf4c/model.onnx',
   sha256: '1414b9aafaa01a644ed706224973f09b53a1388282104409862df9893b1b962b',
 };
-const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true, cpuLimit: 20 };
+const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true, cpuLimit: 20, minScale: 1, offIn: [] };
 let settings = { ...DEFAULTS }, win = null, tray = null, gameReason = null, gameClearSince = 0, gameWatcher = null;
 let status = { model: 'starting', engine: null, flagged: 0, tracked: 0, fps: 0, error: null };
 
@@ -85,6 +85,82 @@ ipcMain.on('clickable', (_e, on) => { if (win && !win.isDestroyed()) win.setIgno
 ipcMain.on('status', (_e, s) => setStatus(s));
 ipcMain.on('set-paused', (_e, v) => setSetting('paused', !!v));
 ipcMain.on('quit', () => quitFully());
+// ---- feedback box: typing mode, saving, settings changes with undo
+let lastFg = '';
+ipcMain.handle('foreground-app', () => lastFg || null);
+ipcMain.on('feedback-mode', (_e, on) => {
+  if (!win || win.isDestroyed()) return;
+  if (on) { win.setIgnoreMouseEvents(false); win.setFocusable(true); win.focus(); }
+  else { win.setFocusable(false); win.setIgnoreMouseEvents(true, { forward: true }); }
+});
+ipcMain.on('feedback', (_e, meta, bytes) => {
+  try {
+    fs.mkdirSync(ratingsDir(), { recursive: true });
+    const file = bytes ? `${new Date().toISOString().replace(/[:.]/g, '-')}-feedback.jpg` : null;
+    if (file) fs.writeFileSync(path.join(ratingsDir(), file), Buffer.from(bytes));
+    fs.appendFileSync(path.join(ratingsDir(), 'feedback.jsonl'), JSON.stringify({ time: new Date().toISOString(), file, ...meta }) + '\n');
+    log('feedback', { text: meta.text, action: meta.action, how: meta.how });
+  } catch (e) { log('feedback save failed', String(e)); }
+});
+ipcMain.on('unrate', () => { try { const p = path.join(ratingsDir(), 'ratings.jsonl'); const lines = fs.readFileSync(p, 'utf8').trimEnd().split('\n'); lines.pop(); fs.writeFileSync(p, lines.length ? lines.join('\n') + '\n' : ''); ratings.list.pop(); } catch { /* nothing to undo */ } });
+const undos = new Map(); let undoN = 0;
+ipcMain.handle('apply-setting', (_e, action, direction, app) => {
+  const before = { ...settings, offIn: [...(settings.offIn || [])] };
+  const SENS = ['strict', 'balanced', 'sensitive'], STR = ['light', 'medium', 'strong'];
+  const step = (list, cur, d) => list[Math.max(0, Math.min(list.length - 1, list.indexOf(cur) + d))];
+  if (action === 'sensitivity') setSetting('sensitivity', step(SENS, settings.sensitivity, direction === 'up' ? 1 : -1));
+  else if (action === 'strength') setSetting('strength', step(STR, settings.strength, direction === 'up' ? 1 : -1));
+  else if (action === 'ignore_small') setSetting('minScale', Math.min(3, (settings.minScale || 1) * 1.5));
+  else if (action === 'app_off' && app) setSetting('offIn', [...new Set([...(settings.offIn || []), app])]);
+  else return null;
+  const token = ++undoN; undos.set(token, before); return token;
+});
+ipcMain.handle('undo-setting', (_e, token) => {
+  const before = undos.get(token); if (!before) return false;
+  for (const k of ['sensitivity', 'strength', 'minScale', 'offIn']) if (JSON.stringify(settings[k]) !== JSON.stringify(before[k])) setSetting(k, before[k]);
+  undos.delete(token); return true;
+});
+ipcMain.handle('llm-read', async () => { throw new Error('language model not set up yet'); }); // replaced below when the model is in
+// ---- ratings: each + / − saved on this PC: a small copy of the picture, its scores, and your call
+const ratingsDir = () => path.join(app.getPath('userData'), 'ratings');
+const ratings = { n: 0, right: 0, list: [] };
+function loadRatings() {
+  try {
+    for (const line of fs.readFileSync(path.join(ratingsDir(), 'ratings.jsonl'), 'utf8').split('\n')) {
+      if (!line.trim()) continue; const r = JSON.parse(line);
+      ratings.n++; if (r.right) ratings.right++; if (r.fp) ratings.list.push({ ...r.fp, verdict: r.verdict });
+    }
+  } catch { /* no ratings yet */ }
+}
+ipcMain.handle('rated', () => ratings.list);
+ipcMain.on('rate', (_e, meta, bytes) => {
+  try {
+    fs.mkdirSync(ratingsDir(), { recursive: true });
+    const file = bytes ? `${new Date().toISOString().replace(/[:.]/g, '-')}-${meta.verdict}.jpg` : null;
+    if (file) fs.writeFileSync(path.join(ratingsDir(), file), Buffer.from(bytes));
+    fs.appendFileSync(path.join(ratingsDir(), 'ratings.jsonl'), JSON.stringify({ time: new Date().toISOString(), file, ...meta }) + '\n');
+    ratings.n++; if (meta.right) ratings.right++; if (meta.fp) ratings.list.push({ ...meta.fp, verdict: meta.verdict });
+    log('rated', { verdict: meta.verdict, right: meta.right, score: meta.score });
+    buildMenu();
+  } catch (e) { log('rating save failed', String(e)); }
+});
+// ---- check picture files: score each at full size and at feed size, show and log the numbers
+let checkDone = null;
+ipcMain.on('check-files-done', (_e, results) => { if (checkDone) { checkDone(results); checkDone = null; } });
+async function checkFiles(paths) {
+  if (!win || win.isDestroyed() || status.model !== 'ready') { dialog.showMessageBox({ type: 'info', message: 'The overlay has to be on and ready first.', detail: 'It may be off while a game runs, or still loading.' }); return; }
+  if (!paths) {
+    const r = await dialog.showOpenDialog({ title: 'Check pictures with the AI detector', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Pictures', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif'] }] });
+    if (r.canceled || !r.filePaths.length) return;
+    paths = r.filePaths;
+  }
+  const files = paths.slice(0, 20).map((p) => ({ name: path.basename(p), bytes: toAB(fs.readFileSync(p)) }));
+  const results = await new Promise((res) => { checkDone = res; win.webContents.send('check-files', files); setTimeout(() => { if (checkDone) { checkDone([]); checkDone = null; } }, 180000); });
+  const pct = (v) => (v == null ? '-' : `${Math.round(v * 100)}%`);
+  const lines = results.map((r) => (r.error ? `${r.name}: couldn't read (${r.error})` : `${r.name}  (${r.w}x${r.h})\n    full size: ${pct(r.full)} AI    at feed size (${r.sw}x${r.sh}): ${pct(r.small)} AI`));
+  log('checked files', results);
+  dialog.showMessageBox({ type: 'info', title: 'AI Slop Overlay', message: 'Detector scores', detail: lines.join('\n\n') + `\n\nBlurred at ${({ sensitive: 50, balanced: 65, strict: 80 })[settings.sensitivity] || 65}% or more. These are also in the log file.` });
+}
 /** Fully stop: no tray icon, no shortcut key, no window, no background processes left behind. */
 function quitFully() {
   log('quitting');
@@ -121,6 +197,9 @@ function buildMenu() {
     { label: 'Read labels and watermarks', type: 'checkbox', checked: settings.readText, click: () => setSetting('readText', !settings.readText) },
     { label: 'Show scores on every picture', type: 'checkbox', checked: settings.showScores, click: () => setSetting('showScores', !settings.showScores) },
     { type: 'separator' },
+    { label: `Your ratings: ${ratings.n}${ratings.n ? ` (right ${ratings.right}, wrong ${ratings.n - ratings.right})` : ''}`, enabled: false },
+    { label: 'Open ratings folder', click: () => { fs.mkdirSync(ratingsDir(), { recursive: true }); shell.openPath(ratingsDir()); } },
+    { label: 'Check picture files…', click: () => checkFiles() },
     { label: 'Open log folder', click: () => shell.openPath(app.getPath('userData')) },
     { label: 'Quit', click: () => quitFully() },
   ]));
@@ -152,6 +231,7 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 if (!app.requestSingleInstanceLock()) app.quit();
 app.whenReady().then(() => {
   loadSettings();
+  loadRatings();
   log('starting', { version: app.getVersion(), electron: process.versions.electron, os: process.platform, release: require('os').release() });
   // the overlay asks for the screen; hand it the primary display without a picker
   session.defaultSession.setDisplayMediaRequestHandler((_req, cb) => {
@@ -166,6 +246,7 @@ app.whenReady().then(() => {
   createOverlay();
   makeDesktopShortcut();
   startGameWatch();
+  if (process.env.SLOP_CHECK_FILES) setTimeout(() => checkFiles(process.env.SLOP_CHECK_FILES.split('|')), 9000); // tests only
 });
 
 /** Put an "AI Slop Overlay" shortcut on the desktop the first time, and keep it pointing at this copy. */
@@ -214,7 +295,9 @@ function gameCheck(o) {
 }
 
 function onGameReading(o) {
-  const why = gameCheck(o), now = Date.now();
+  lastFg = String(o.fg || '');
+  const mine = (settings.offIn || []).find((a) => a.toLowerCase() === lastFg.toLowerCase());
+  const why = mine ? `you turned it off in ${mine}` : gameCheck(o), now = Date.now();
   if (why) { gameClearSince = 0; if (gameReason !== why) { const was = gameReason; gameReason = why; if (!was) log('game detected:', why); applyGameMode(); buildMenu(); } return; }
   if (!gameReason) return;
   if (!gameClearSince) gameClearSince = now;
@@ -223,7 +306,7 @@ function onGameReading(o) {
 
 /** Off during games: remove the window entirely (that also ends screen capture). Back on after. */
 function applyGameMode() {
-  const off = settings.gameGuard && gameReason;
+  const off = gameReason && (settings.gameGuard || gameReason.startsWith('you turned it off'));
   if (off) { if (win && !win.isDestroyed()) { win.destroy(); win = null; log('overlay removed while a game runs'); } }
   else if (!win || win.isDestroyed()) { createOverlay(); }
   if (tray) tray.setToolTip(tooltip());

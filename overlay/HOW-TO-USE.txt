@@ -1,4 +1,4 @@
-AI Slop Overlay, v0.12
+AI Slop Overlay, v0.15
 Lightly blurs pictures and videos that look AI-generated, anywhere on your screen.
 
 NEEDS: Windows 10 (version 2004 or newer) or Windows 11, 64-bit.
@@ -25,6 +25,17 @@ CONTROLS
   (The same picture opened somewhere else is still checked.) Tray > "Ignore my desktop wallpaper" to change that.
 - Tray > "CPU limit": 10%, 20% (default), 35% or no limit. It measures its own CPU use (the number Task Manager
   shows) and checks less often when it's over. It also does almost nothing while the screen is still.
+- RATE IT: every tag has + and -. + means it got that picture right, - means it got it wrong.
+  - on a blurred picture unblurs it (you're saying it's real). With "Show scores on every picture" on, the grey
+  tags have + and - too: - there means it missed an AI picture, and it blurs it. Your call sticks to that picture,
+  even after a restart. Each rating saves a small copy of the picture and its scores on your PC only
+  (tray > "Open ratings folder"); the tray shows how often it was right.
+- TELL IT SOMETHING: the … button on any tag opens a box for one sentence, like "this is AI", "this is a real
+  photo", "anything like this is AI", "stop blurring in Discord", "too many false alarms", "blur more" or
+  "stop blurring profile pics". It does it and shows what it did, with Undo. Every sentence is saved with the picture
+  (ratings folder, feedback.jsonl) so it can be reviewed later.
+- Tray > "Check picture files…": pick pictures saved on your PC and see the detector's score for each, at full
+  size and shrunk to feed size. Useful for finding out why something wasn't blurred.
 - Tray > "Show scores on every picture" puts a small grey score on every picture it finds, blurred or not.
   Handy when it misses one: no score means it didn't find the picture; a low score means the detector
   didn't think it was AI. Tray > Sensitivity > Sensitive blurs from 50% instead of 65%.

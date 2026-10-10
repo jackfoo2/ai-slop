@@ -8,6 +8,21 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
   box-shadow: 0 2px 10px rgba(0,0,0,.4); cursor: pointer; pointer-events: auto; user-select: none; white-space: nowrap; }
 .chip:hover { background: rgba(30, 33, 42, 0.96); }
 .chip.score { cursor: default; pointer-events: none; border-left-color: #8b93a3; background: rgba(20, 22, 28, 0.6); font-weight: 500; }
+.chip { display: flex; align-items: center; gap: 5px; }
+.chip .lbl { cursor: pointer; }
+.chip.score .lbl { cursor: default; }
+.chip .rate { pointer-events: auto; border: 0; border-radius: 4px; width: 20px; height: 18px; padding: 0; font: 700 13px/18px "Segoe UI", system-ui, sans-serif;
+  color: #fff; background: rgba(255,255,255,.14); cursor: pointer; }
+.chip .rate.up:hover { background: #3fae6a; }
+.chip .rate.down:hover { background: #c42b1c; }
+.chip .rate.more:hover { background: #4a6a92; }
+#fb { position: fixed; z-index: 10; display: flex; gap: 6px; padding: 6px; border-radius: 9px; background: rgba(20, 22, 28, 0.95); box-shadow: 0 6px 18px rgba(0,0,0,.45); pointer-events: auto; }
+#fb input { width: 280px; padding: 6px 8px; border: 1px solid #3a3f4d; border-radius: 6px; background: #12141a; color: #fff; font: 13px "Segoe UI", system-ui, sans-serif; outline: none; }
+#fb input:focus { border-color: #fb7185; }
+#fb button, #toast button { border: 0; border-radius: 6px; padding: 5px 10px; font: 600 12px "Segoe UI", system-ui, sans-serif; color: #fff; background: #3a3f4d; cursor: pointer; }
+#fb #fbSend { background: #fb7185; color: #1a0d10; }
+#toast { position: fixed; top: 42px; left: 6px; z-index: 10; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 11px; border-radius: 8px;
+  background: rgba(20, 22, 28, 0.92); color: #fff; font: 600 12px "Segoe UI", system-ui, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,.4); pointer-events: auto; }
 .x { position: absolute; top: 0; left: 0; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   font: 700 13px/1 "Segoe UI", system-ui, sans-serif; color: #fff; background: rgba(20, 22, 28, 0.85); box-shadow: 0 2px 8px rgba(0,0,0,.4);
   cursor: pointer; pointer-events: auto; user-select: none; }
@@ -23,4 +38,6 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 #bar.off #onoff { background: #3a3f4d; color: #fff; }
 #bar #close:hover { background: #c42b1c; }
 </style></head><body><canvas id="view"></canvas><div id="chips"></div>
+<div id="fb" hidden><input id="fbIn" type="text" maxlength="300" placeholder="What's wrong? e.g. &quot;this is AI&quot;, &quot;stop in Discord&quot;, &quot;too many false alarms&quot;"><button id="fbSend" type="button">Send</button><button id="fbCancel" type="button">✕</button></div>
+<div id="toast" hidden><span class="msg"></span><button class="undo" type="button">Undo</button></div>
 <div id="bar"><span class="dot"></span><span class="name">AI Slop</span><button id="onoff" type="button">On</button><button id="close" type="button" title="Close AI Slop Overlay">✕</button></div><script src="overlay.js"></script></body></html>

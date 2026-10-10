@@ -144,3 +144,34 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
   the window, all back after), hover, grid scrolling, labels, wallpaper all pass.
 - Already on the graphics card when WebGPU works: the AI model, capture, drawing the blur. Text reading has no
   graphics-card version; at higher CPU levels it only runs while the screen is still, or not at all.
+
+## v0.13 (Jack: some fully AI-made pictures are never detected)
+- Suspected cause: the overlay only sees the screen, where pictures are shown shrunk (and the site already
+  recompressed them); shrinking wipes out much of the fine pattern detectors rely on. The extension reads
+  the original file.
+- Added tray "Check picture files…": scores chosen files with the real model at full size and at feed size
+  (fit in 500x750), shows both, logs them. Next step depends on Jack's numbers: high at full size but low at
+  feed size -> score pictures at the largest size they appear / add a detector that survives shrinking; low at
+  both -> add a second detector (Community Forensics ViT, trained on ~4,800 generators) and combine votes.
+
+## v0.14 (Jack: a simple + / - to tell it whether it got it right)
+- + and - on every blur tag, and on the grey score tags when "Show scores on every picture" is on. - on a blur =
+  real (unblurs); - on a grey tag = a missed AI picture (blurs). Your call overrides the detector for that picture.
+- Remembered per picture across restarts with a tolerant fingerprint (averaged brightness and red-blue values on a
+  6x6 grid, plus shape; match if the average difference is under 2.5 of 255). Tested: a picture matches itself at
+  0, different pictures sit 12-18 apart; a meme made from the same photo matched at about 2.
+- Each rating saves a small JPEG of the picture plus its scores, text hit, CPU level and sensitivity to
+  ratings/ratings.jsonl in the app's data folder (local only). Tray: tally (right / wrong) and "Open ratings folder".
+- Next: once there are a few dozen ratings, use them to measure accuracy on Jack's real feed and tune: his own
+  threshold, and whether a second detector helps.
+
+## v0.15 stage 1 (Jack: a feedback box for a sentence it can review and act on)
+- "…" button on every tag opens a one-line box. The overlay becomes typeable only while it's open.
+- A fixed menu of actions: mark this picture AI/real; pictures like this (a wider fingerprint match);
+  turn off in the app in front (like game mode, its own reason, works even with the game switch off);
+  sensitivity up/down; blur strength up/down; ignore small pictures; or save as a note. Confirmation with Undo.
+- Phrase reader (src/feedback.js) handles common wordings (13/13 test sentences). Every sentence is saved with the
+  picture, scores and resulting action to ratings/feedback.jsonl.
+- Tested end to end: "real photo" unblurred it; "too many false alarms" Balanced->Strict, Undo restored; "stop in
+  Discord" with Discord in front switched off until Discord left the front.
+- Stage 2 (in progress): a small local language model for sentences the phrase reader can't place.

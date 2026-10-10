@@ -3,6 +3,7 @@
 // blur over the ones the model thinks are AI. A few times a second: look for new pictures.
 import { findRegions, grayDown, Tracker } from './core.js';
 import { startOcr, readText, matchAiText } from './ocr.js';
+import { readPhrases, cleanAction, describe } from './feedback.js';
 
 const THRESH = { sensitive: 0.5, balanced: 0.65, strict: 0.8 };
 const BLUR = { light: [3, 9], medium: [6, 16], strong: [10, 24] }; // CSS px at the line -> at 100%
@@ -35,7 +36,7 @@ const departed = [], lastSeen = new Map();
 function rememberDeparted(now) {
   const alive = new Set(tracker.boxes.map((b) => b.id));
   for (const [id, d] of lastSeen) if (!alive.has(id)) { if (d.p != null) { departed.push({ ...d, at: now }); if (departed.length > 300) departed.shift(); } lastSeen.delete(id); }
-  for (const b of tracker.boxes) if (b.p != null) lastSeen.set(b.id, { x: b.x, w: b.w, top: b.y - scrollAcc, h: b.h, p: b.p, revealed: !!b.revealed, history: b.history.slice(), textHit: b.textHit, ocrDone: b.ocrDone });
+  for (const b of tracker.boxes) if (b.p != null) lastSeen.set(b.id, { x: b.x, w: b.w, top: b.y - scrollAcc, h: b.h, p: b.p, revealed: !!b.revealed, history: b.history.slice(), textHit: b.textHit, ocrDone: b.ocrDone, user: b.user });
 }
 function recall(r) {
   const top = r.y - scrollAcc, bot = top + r.h;
@@ -139,7 +140,8 @@ function step() {
 const iou = (a, b) => { const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y), x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h); const i = Math.max(0, x1 - x0) * Math.max(0, y1 - y0); return i / (a.w * a.h + b.w * b.h - i); };
 
 function detect(img) {
-  const found = findRegions(img, { block: Math.max(8, Math.round(8 * k)), minW: 120 * k, minH: 90 * k, wall: settings.ignoreWallpaper && wall && wall.width === img.width && wall.height === img.height ? wall.data : null });
+  const ms = settings.minScale || 1;
+  const found = findRegions(img, { block: Math.max(8, Math.round(8 * k)), minW: 120 * k * ms, minH: 90 * k * ms, wall: settings.ignoreWallpaper && wall && wall.width === img.width && wall.height === img.height ? wall.data : null });
   const seen = new Set();
   for (const r of found) {
     if (onWallpaper(img, r)) { const old = tracker.boxes.find((b) => iou(b, r) > 0.3); if (old) old.miss = 9; continue; } // it's the desktop
@@ -157,7 +159,9 @@ function detect(img) {
       else {
       // same outline, different pixels: a video (or the picture was swapped); re-check it soon from fresh scores
       if (!same && still && !hit.dynamic) { hit.dynamic = true; hit.covered = false; hit.cells = null; hit.history = []; hit.nextScore = performance.now(); } // only judged while still: scrolling shifts pixels too
-      hit.miss = 0; if (!hit.cells && !hit.covered) hit.thumb = thumbOf(img, hit); seen.add(hit.id); continue;
+      hit.miss = 0; if (!hit.cells && !hit.covered) hit.thumb = thumbOf(img, hit); seen.add(hit.id);
+      if (!hit.user && ratedList.length && (hit.fpChecks = (hit.fpChecks || 0) + 1) <= 20 && !hit.cells && !hit.covered) { hit.fp = fingerprint(img, hit); const v = ratedVerdict(hit.fp); if (v) hit.user = v; }
+      continue;
       }
     }
     // a much bigger shape around a known picture (e.g. a hover highlight) only counts as that picture if the
@@ -167,11 +171,13 @@ function detect(img) {
     if (around) { if (around.thumb && sameContent(img, around)) { around.miss = 0; seen.add(around.id); } continue; }
     const b = tracker.add({ ...r, p: null, history: [], sig: signature(img, r) });
     b.thumb = thumbOf(img, b);
+    b.fp = fingerprint(img, b);
+    const mine = ratedVerdict(b.fp); if (mine) b.user = mine;
     const known = cache.get(b.sig);
     seen.add(b.id);
     const back = known ? null : recall(r);
     if (known) { b.p = known.p; b.revealed = known.revealed; b.textHit = known.textHit; b.ocrDone = known.ocrDone; b.nextScore = performance.now() + RESCORE_CLEAN; }
-    else if (back) { b.p = back.p; b.revealed = back.revealed; b.history = back.history.slice(); b.textHit = back.textHit; b.ocrDone = back.ocrDone; b.nextScore = performance.now() + 1000; } // scrolled back: blur at once, re-check soon
+    else if (back) { b.p = back.p; b.revealed = back.revealed; b.history = back.history.slice(); b.textHit = back.textHit; b.ocrDone = back.ocrDone; b.user = b.user || back.user; b.nextScore = performance.now() + 1000; } // scrolled back: blur at once, re-check soon
     else queueScore(b);
   }
   // a picture that two re-scans in a row can't find is gone: drop it (and its blur) right away
@@ -287,6 +293,29 @@ function signature(img, r) {
   }
   return `${Math.round(r.w / 16)}x${Math.round(r.h / 16)}:${s}`;
 }
+/** For ratings: averaged brightness on a 6x6 grid plus the picture's shape, compared with a tolerance
+ *  (survives a pixel of drift and resizing, but different pictures don't match). */
+function fingerprint(img, r) {
+  const { data, width: W, height: H } = img, v = [];
+  for (let j = 0; j < 6; j++) for (let i = 0; i < 6; i++) {
+    const cx = Math.floor(r.x + ((i + 0.5) * r.w) / 6), cy = Math.floor(r.y + ((j + 0.5) * r.h) / 6); let t = 0, c = 0, n = 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const x = Math.min(W - 1, Math.max(0, cx + dx)), y = Math.min(H - 1, Math.max(0, cy + dy)), q = (y * W + x) * 4;
+      t += (data[q] * 77 + data[q + 1] * 150 + data[q + 2] * 29) >> 8; c += data[q] - data[q + 2]; n++;
+    }
+    v.push(Math.round(t / n), Math.round(c / n / 2 + 128)); // brightness and a red-blue color value per cell
+  }
+  return { a: +(r.w / r.h).toFixed(3), v };
+}
+function ratedVerdict(fp) {
+  let best = null, bestD = Infinity; // each rating has a match distance: 2.5 for 'this picture', wider for 'pictures like this'
+  for (const e of ratedList) {
+    if (Math.abs(e.a - fp.a) > (e.tol ? 0.25 : 0.06) || !e.v || e.v.length !== fp.v.length) continue;
+    let d = 0; for (let i = 0; i < fp.v.length; i++) d += Math.abs(e.v[i] - fp.v[i]); d /= fp.v.length;
+    if (d < (e.tol || 2.5) && d < bestD) { bestD = d; best = e; }
+  }
+  return best ? best.verdict : null;
+}
 
 let ocrBusy = false, ocrMs = 0, ocrN = 0;
 let lastProc = 0, lastFull = 0, stillSince = performance.now(), processed = 0, idle = 0, skipped = 0;
@@ -391,7 +420,12 @@ function queueScore(b) {
 
 const textP = (b) => (b.textHit ? (b.textHit.kind === 'watermark' ? 0.97 : 0.9) : 0);
 const effP = (b) => Math.max(b.p ?? 0, textP(b));
-const isBlurred = (b) => (b.p != null || b.textHit) && effP(b) >= thr() && !b.revealed && !b.covered && (b.lost || 0) < 2;
+const isBlurred = (b) => {
+  if (b.user === 'real') return false;                  // you said it's real
+  const showing = !b.revealed && !b.covered && (b.lost || 0) < 2;
+  if (b.user === 'ai') return showing;                  // you said it's AI
+  return (b.p != null || b.textHit) && effP(b) >= thr() && showing;
+};
 
 // ---- drawing: its own loop at the screen's refresh rate, projecting each box forward by how fast it
 // moves and how old the latest capture is, so the blur keeps up with scrolling between captures
@@ -400,6 +434,46 @@ function uiEl(map, id, make, kind = '') { let el = map.get(id); if (el && el.dat
 function clickableEl(el) { el.addEventListener('mouseenter', () => slop.clickable(true)); el.addEventListener('mouseleave', () => slop.clickable(false)); return el; }
 function reveal(b) { b.revealed = true; const c = cache.get(b.sig); if (c) c.revealed = true; slop.clickable(false); }
 
+// ---- ratings: + (it got it right) and − (it got it wrong) on every tag
+let ratedList = []; // { a: shape, v: 36 brightness values, verdict } from your ratings (kept across restarts)
+slop.rated().then((list) => { ratedList = list || []; }).catch(() => {});
+function setChipText(chip, t) { const l = chip.querySelector('.lbl'); if (chip.dataset.flash && performance.now() < +chip.dataset.flash) return; if (l.textContent !== t) l.textContent = t; }
+function makeChip(b, blurChip) {
+  const el = document.createElement('div'); el.className = 'chip';
+  const lbl = document.createElement('span'); lbl.className = 'lbl'; el.appendChild(lbl);
+  if (blurChip) { clickableEl(lbl); lbl.addEventListener('click', () => reveal(b)); }
+  for (const [sym, right, tip] of [['+', true, 'It got this right'], ['−', false, 'It got this wrong']]) {
+    const btn = clickableEl(document.createElement('button'));
+    btn.className = `rate ${right ? 'up' : 'down'}`; btn.textContent = sym; btn.title = tip;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); rate(b, right, el); });
+    el.appendChild(btn);
+  }
+  const more = clickableEl(document.createElement('button'));
+  more.className = 'rate more'; more.textContent = '…'; more.title = 'Tell it something';
+  more.addEventListener('click', (e) => { e.stopPropagation(); openFeedback(b, el); });
+  el.appendChild(more);
+  return el;
+}
+function rate(b, right, chip) {
+  try { b.fp = fingerprint(fctx.getImageData(0, 0, frame.width, frame.height), b); } catch { /* keep the earlier one */ }
+  const predictedAI = isBlurred(b) || (b.user !== 'real' && b.p != null && effP(b) >= thr());
+  const isAI = right ? predictedAI : !predictedAI;
+  b.user = isAI ? 'ai' : 'real'; if (isAI) b.revealed = false;
+  if (b.fp) { ratedList = ratedList.filter((e) => !(Math.abs(e.a - b.fp.a) <= 0.06 && e.v.every((x, i) => Math.abs(x - b.fp.v[i]) < 6))); ratedList.push({ ...b.fp, verdict: b.user }); }
+  chip.querySelector('.lbl').textContent = right ? 'Thanks · noted' : isAI ? 'Got it · marked AI, blurred' : 'Got it · marked real, unblurred';
+  chip.dataset.flash = String(performance.now() + 1800);
+  slop.clickable(false);
+  // a small copy of the picture and its scores, saved on this PC only
+  const VW = video.videoWidth, VH = video.videoHeight, X = (v) => Math.round(v / f);
+  const x = Math.max(0, X(b.x)), y = Math.max(0, X(b.y)), w = Math.min(VW - x, X(b.w)), h = Math.min(VH - y, X(b.h));
+  const s = Math.min(1, 512 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+  c.getContext('2d').drawImage(video, x, y, w, h, 0, 0, c.width, c.height);
+  c.toBlob(async (blob) => {
+    const meta = { verdict: b.user, detectorSaid: predictedAI ? 'ai' : 'real', right, score: b.p == null ? null : +b.p.toFixed(4), scores: (b.history || []).map((v) => +v.toFixed(4)), text: b.textHit || null, size: [w, h], fp: b.fp || null, level, sensitivity: settings.sensitivity };
+    slop.rate(meta, blob ? await blob.arrayBuffer() : null);
+  }, 'image/jpeg', 0.85);
+}
 let lastRender = 0, drawn = []; // drawn: the blurred rectangles of the last frame (for tests)
 function renderLoop() { render(); requestAnimationFrame(renderLoop); }
 // backup: if the screen-refresh loop ever stalls, keep drawing anyway
@@ -428,18 +502,18 @@ function render() {
       vctx.filter = `blur(${px.toFixed(1)}px) saturate(0.85)`;
       vctx.drawImage(frame, b.x - pad, b.y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m, b.x - pad, y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m);
       vctx.restore();
-      const chip = uiEl(chips, b.id, () => { const el = clickableEl(document.createElement('div')); el.className = 'chip'; el.addEventListener('click', () => reveal(b)); return el; }, 'blur');
+      const chip = uiEl(chips, b.id, () => makeChip(b, true), 'blur');
       chip.className = 'chip';
-      chip.textContent = b.textHit ? `${b.textHit.kind === 'watermark' ? 'Watermark' : 'Label'} · ${b.textHit.word} · show` : `Likely AI · ${Math.round(b.p * 100)}% · show`;
+      setChipText(chip, b.user === 'ai' ? 'You marked AI · show' : b.textHit ? `${b.textHit.kind === 'watermark' ? 'Watermark' : 'Label'} · ${b.textHit.word} · show` : `Likely AI · ${Math.round(b.p * 100)}% · show`);
       chip.style.transform = `translate(${(b.x / k + 8).toFixed(1)}px, ${(top / k + 8).toFixed(1)}px)`;
       const x = uiEl(xs, b.id, () => { const el = clickableEl(document.createElement('div')); el.className = 'x'; el.textContent = '✕'; el.title = 'Remove the blur'; el.addEventListener('click', () => reveal(b)); return el; });
       x.style.transform = `translate(${((b.x + b.w) / k - 34).toFixed(1)}px, ${(top / k + 6).toFixed(1)}px)`;
     } else if (settings.showScores) {
       // diagnostic: a small grey score on every picture it found, blurred or not
       live.add(b.id);
-      const chip = uiEl(chips, b.id, () => { const el = document.createElement('div'); el.className = 'chip'; return el; }, 'score');
+      const chip = uiEl(chips, b.id, () => makeChip(b, false), 'score');
       chip.className = 'chip score';
-      chip.textContent = (b.p == null ? 'checking…' : `AI ${Math.round(b.p * 100)}%`) + (b.textHit ? ` · ${b.textHit.word}` : '') + (b.revealed ? ' (shown)' : '');
+      setChipText(chip, b.user === 'real' ? 'You marked real' : (b.p == null ? 'checking…' : `AI ${Math.round(b.p * 100)}%`) + (b.textHit ? ` · ${b.textHit.word}` : '') + (b.revealed ? ' (shown)' : ''));
       chip.style.transform = `translate(${(b.x / k + 8).toFixed(1)}px, ${(top / k + 8).toFixed(1)}px)`;
     }
   }
@@ -466,6 +540,7 @@ window.__wallCheck = () => {
     return { box: [Math.round(b.x), Math.round(b.y), Math.round(b.w), Math.round(b.h)], match: +(m / n).toFixed(2), avgDiff: Math.round(d / n), blurred: isBlurred(b) }; });
 };
 window.__slopDrawn = () => drawn.map((r) => r.map((v) => +(v / k).toFixed(1)));
+window.__ratedDebug = () => { const img = fctx.getImageData(0, 0, frame.width, frame.height); return tracker.boxes.map((b) => { const fp = fingerprint(img, b); return { x: Math.round(b.x), y: Math.round(b.y), user: b.user || null, a: fp.a, d: ratedList.map((e) => (e.v && e.v.length === fp.v.length ? +(e.v.reduce((t, x, i) => t + Math.abs(x - fp.v[i]), 0) / fp.v.length).toFixed(2) : 'len' + (e.v ? e.v.length : 0)) + '/' + e.verdict + '/a' + e.a) }; }); };
 window.__slopUI = () => ({ ocrAvgMs: ocrN ? Math.round(ocrMs / ocrN) : null, texts: tracker.boxes.map((b) => ({ y: Math.round(b.y / k), done: !!b.ocrDone, hit: b.textHit, blurred: isBlurred(b) })), chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
 window.__slopState = () => ({ scoringNow: scoring, level, processed, idle, skipped, scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b), covered: !!b.covered, cellsOn: b.cells ? b.cells.reduce((a, c) => a + c, 0) : null, dynamic: !!b.dynamic, miss: b.miss || 0, lost: b.lost || 0, isScoring: !!b.scoring, nextIn: b.nextScore ? Math.round(b.nextScore - performance.now()) : null, hist: (b.history || []).map((v) => +v.toFixed(2)) })) });
 // ---- the control bar (top-left): on/off and close
@@ -480,5 +555,79 @@ bar.addEventListener('mouseleave', () => slop.clickable(false));
 bar.querySelector('#onoff').addEventListener('click', () => { slop.setPaused(!settings.paused); });
 bar.querySelector('#close').addEventListener('click', () => slop.quit());
 slop.onSettings((s) => { settings = s; paintBar(); });
+
+// ---- tray "Check picture files…": each file scored at full size and shrunk to a typical feed size
+slop.onCheckFiles(async (files) => {
+  const out = [];
+  for (const f of files) {
+    try {
+      const blob = new Blob([f.bytes]), probe = await createImageBitmap(blob), w = probe.width, h = probe.height; probe.close();
+      const s = Math.min(1, 500 / w, 750 / h), sw = Math.round(w * s), sh = Math.round(h * s);
+      const full = await engine.score(await createImageBitmap(blob), 2);
+      const small = await engine.score(await createImageBitmap(blob, { resizeWidth: sw, resizeHeight: sh, resizeQuality: 'high' }), 2);
+      out.push({ name: f.name, w, h, sw, sh, full: +full.toFixed(4), small: +small.toFixed(4) });
+    } catch (e) { out.push({ name: f.name, error: String(e?.message || e) }); }
+  }
+  slop.checkFilesDone(out);
+});
+
+// ---- feedback box: a sentence about this picture; saved, then acted on
+const fb = document.getElementById('fb'), fbIn = document.getElementById('fbIn'), toast = document.getElementById('toast');
+let fbBox = null;
+function openFeedback(b, chip) {
+  fbBox = b;
+  const r = chip.getBoundingClientRect();
+  fb.style.left = `${Math.min(window.innerWidth - 380, Math.max(6, r.left))}px`; fb.style.top = `${Math.min(window.innerHeight - 90, r.bottom + 6)}px`;
+  fb.hidden = false; fbIn.value = '';
+  slop.feedbackMode(true); // the overlay can take typing while the box is open
+  setTimeout(() => fbIn.focus(), 60);
+}
+function closeFeedback() { fb.hidden = true; fbBox = null; slop.feedbackMode(false); }
+document.getElementById('fbCancel').addEventListener('click', closeFeedback);
+fbIn.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFeedback(); if (e.key === 'Enter') sendFeedback(); });
+document.getElementById('fbSend').addEventListener('click', sendFeedback);
+async function sendFeedback() {
+  const text = fbIn.value.trim(), b = fbBox;
+  closeFeedback();
+  if (!text || !b) return;
+  // 1) save it, with the picture and its scores
+  const VW = video.videoWidth, VH = video.videoHeight, X = (v) => Math.round(v / f);
+  const x = Math.max(0, X(b.x)), y = Math.max(0, X(b.y)), w = Math.min(VW - x, X(b.w)), h = Math.min(VH - y, X(b.h));
+  const s = Math.min(1, 512 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+  c.getContext('2d').drawImage(video, x, y, w, h, 0, 0, c.width, c.height);
+  try { b.fp = fingerprint(fctx.getImageData(0, 0, frame.width, frame.height), b); } catch { /* keep the earlier one */ }
+  const bytes = await new Promise((res) => c.toBlob(async (bl) => res(bl ? await bl.arrayBuffer() : null), 'image/jpeg', 0.85));
+  // 2) work out what it means: the phrase reader first, then the small language model for anything else
+  let action = readPhrases(text), how = 'phrases';
+  if (!action) { showToast('Reading your feedback…', null, 20000); try { action = await slop.llmRead(text); how = 'model'; } catch (e) { slop.log('feedback model error', String(e?.message || e)); } }
+  action = cleanAction(action);
+  const app = await slop.foregroundApp().catch(() => null);
+  slop.feedback({ text, action, how, verdictBefore: isBlurred(b) ? 'blurred' : 'not blurred', score: b.p == null ? null : +b.p.toFixed(4), text_hit: b.textHit || null, fp: b.fp || null, app }, bytes);
+  // 3) do it, and offer an undo
+  const undo = await applyFeedback(action, b, app);
+  showToast(`Got it: ${describe(action, app)}`, undo);
+}
+async function applyFeedback(a, b, app) {
+  const prevUser = b.user, prevRevealed = b.revealed;
+  if (a.action === 'mark' || a.action === 'similar') {
+    b.user = a.verdict; if (a.verdict === 'ai') b.revealed = false;
+    const entry = { ...(b.fp || {}), verdict: a.verdict, tol: a.action === 'similar' ? 8 : undefined };
+    if (b.fp) ratedList.push(entry);
+    slop.rate({ verdict: a.verdict, detectorSaid: null, right: null, score: b.p, fp: b.fp || null, tol: entry.tol, fromFeedback: true }, null);
+    return () => { b.user = prevUser; b.revealed = prevRevealed; ratedList = ratedList.filter((e) => e !== entry); slop.unrate(); };
+  }
+  if (a.action === 'note') return null;
+  const token = await slop.applySetting(a.action, a.direction, app); // settings changes live in the main process
+  return token ? () => slop.undoSetting(token) : null;
+}
+let toastTimer = 0;
+function showToast(msg, undo, ms = 8000) {
+  toast.querySelector('.msg').textContent = msg;
+  const u = toast.querySelector('.undo'); u.hidden = !undo;
+  u.onclick = () => { if (undo) undo(); toast.querySelector('.msg').textContent = 'Undone'; u.hidden = true; slop.clickable(false); clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 2500); };
+  toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; slop.clickable(false); }, ms);
+}
+clickableEl(toast);
 
 start().then(paintBar);
