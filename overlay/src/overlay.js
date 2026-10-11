@@ -51,7 +51,9 @@ function recall(r) {
 }
 const chips = new Map(); // box id -> chip element
 const thr = () => THRESH[settings.sensitivity] ?? 0.65;
-const blurPx = (p) => { const t = thr(), [lo, hi] = BLUR[settings.strength] || BLUR.light; const q = Math.min(1, Math.max(0, (p - t) / (1 - t))); return lo + (hi - lo) * q; };
+// blur in screen (CSS) pixels: the slider's amount, nudged only slightly by confidence (an indicator, not a wall)
+const blurPx = (p) => { const t = thr(), q = Math.min(1, Math.max(0, (p - t) / (1 - t))); return (settings.blurPx || 2) * (0.85 + 0.3 * q); };
+let capPerCss = 1; // capture pixels per screen (CSS) pixel
 
 async function start() {
   try {
@@ -67,6 +69,7 @@ async function start() {
     video.srcObject = stream; await video.play();
     f = Math.min(1, MAX_PROC_W / video.videoWidth);
     k = (video.videoWidth * f) / disp.width || 1;
+    capPerCss = video.videoWidth / disp.width || 1;
     slop.log('capturing', { video: [video.videoWidth, video.videoHeight], display: disp, k, engine: engine.name });
     loadWallpaper(); setInterval(loadWallpaper, 120000); // after capture starts (needs the screen size); picks up a changed wallpaper
     video.requestVideoFrameCallback(onFrame);
@@ -105,7 +108,7 @@ function onFrame(now, meta) {
 function step() {
   if (!video.videoWidth || !video.videoHeight) return;
   const W = Math.round(video.videoWidth * f), H = Math.round(video.videoHeight * f);
-  if (frame.width !== W || frame.height !== H) { frame.width = W; frame.height = H; view.width = W; view.height = H; tracker = new Tracker({ searchY: 60 }); }
+  if (frame.width !== W || frame.height !== H) { frame.width = W; frame.height = H; view.width = video.videoWidth; view.height = video.videoHeight; tracker = new Tracker({ searchY: 60 }); } // blur is drawn at full capture resolution
   if (settings.paused) { clearAll(); return; }
   const t0f = performance.now();
   if (t0f - lastProc < 1000 / L().fps - 2) { skipped++; return; } // frame-rate cap for this CPU level
@@ -491,16 +494,19 @@ function render() {
     if (isBlurred(b)) {
       live.add(b.id);
       const moving = Math.abs(b.vpm || 0) > 0.05, m = moving ? Math.min(14, Math.abs(b.vpm) * 25) : 0; // a little extra cover while scrolling
-      const px = blurPx(effP(b)) * k, pad = Math.ceil(px * 2);
+      const pxCap = blurPx(effP(b)) * capPerCss, pad = Math.ceil(pxCap * f * 2); // blur in capture pixels; pad in processing units
       vctx.save();
+      vctx.setTransform(1 / f, 0, 0, 1 / f, 0, 0); // shapes in processing units, drawn at full capture resolution
       vctx.beginPath();
       if (b.cells) {
         const cw = b.w / G, ch = b.h / G;
         for (let j = 0; j < G; j++) { let i = 0; while (i < G) { if (!b.cells[j * G + i]) { i++; continue; } let e = i; while (e < G && b.cells[j * G + e]) e++; vctx.rect(b.x + i * cw, y + j * ch, (e - i) * cw, ch); drawn.push([b.x + i * cw, y + j * ch, (e - i) * cw, ch]); i = e; } }
       } else { vctx.rect(b.x, top - m, b.w, bottom - top + 2 * m); drawn.push([b.x, top - m, b.w, bottom - top + 2 * m]); }
       vctx.clip();
-      vctx.filter = `blur(${px.toFixed(1)}px) saturate(0.85)`;
-      vctx.drawImage(frame, b.x - pad, b.y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m, b.x - pad, y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m);
+      vctx.filter = `blur(${pxCap.toFixed(2)}px) saturate(0.85)`;
+      // straight from the live, full-quality capture, at where the picture is now
+      const sx = (b.x - pad) / f, sy = (y - pad - m) / f, sw = (b.w + 2 * pad) / f, sh = (b.h + 2 * pad + 2 * m) / f;
+      vctx.drawImage(video, sx, sy, sw, sh, b.x - pad, y - pad - m, b.w + 2 * pad, b.h + 2 * pad + 2 * m);
       vctx.restore();
       const chip = uiEl(chips, b.id, () => makeChip(b, true), 'blur');
       chip.className = 'chip';
@@ -554,7 +560,45 @@ bar.addEventListener('mouseenter', () => slop.clickable(true));
 bar.addEventListener('mouseleave', () => slop.clickable(false));
 bar.querySelector('#onoff').addEventListener('click', () => { slop.setPaused(!settings.paused); });
 bar.querySelector('#close').addEventListener('click', () => slop.quit());
-slop.onSettings((s) => { settings = s; paintBar(); });
+slop.onSettings((s) => { settings = s; paintBar(); if (!menuEl.hidden && !menuEl.contains(document.activeElement)) paintMenu(); });
+
+// ---- the gear menu: everything you can switch, in one place
+const menuEl = document.getElementById('menu'), gear = bar.querySelector('#gear');
+const TOGGLES = [['video', 'Check videos'], ['readText', 'Read labels and watermarks'], ['ignoreWallpaper', 'Ignore my desktop wallpaper'], ['gameGuard', 'Turn off during games'], ['showScores', 'Show scores on every picture']];
+const CHOICES = [
+  ['sensitivity', 'Sensitivity', [['sensitive', 'Sensitive'], ['balanced', 'Balanced'], ['strict', 'Strict']]],
+  ['cpuLimit', 'CPU limit', [[10, '10%'], [20, '20%'], [35, '35%'], [0, 'None']]],
+];
+function paintMenu() {
+  const s = settings, h = [];
+  h.push('<h3>Switches</h3>');
+  for (const [k, label] of TOGGLES) h.push(`<label><input type="checkbox" data-k="${k}" ${s[k] ? 'checked' : ''}> ${label}</label>`);
+  const bp = s.blurPx || 2;
+  h.push(`<h3>Blur amount</h3><label class="slider"><input type="range" min="0.5" max="10" step="0.5" value="${bp}" data-slider="blurPx"><span class="val">${bp} px</span></label>`);
+  for (const [k, label, opts] of CHOICES) {
+    h.push(`<h3>${label}</h3><div class="seg">`);
+    for (const [v, l] of opts) h.push(`<button type="button" data-k="${k}" data-v='${JSON.stringify(v)}' class="${s[k] === v ? 'on' : ''}">${l}</button>`);
+    h.push('</div>');
+  }
+  h.push('<h3>Turned off in</h3>');
+  const apps = s.offIn || [];
+  if (!apps.length) h.push('<div class="none">No apps. Use the … box: "stop in this app".</div>');
+  for (const a of apps) h.push(`<div class="app"><span>${a.replace(/[<>&]/g, '')}</span><button type="button" data-remove="${a.replace(/"/g, '')}">Turn back on</button></div>`);
+  h.push('<h3>Tools</h3><div class="acts"><button class="act" type="button" data-act="check-files">Check picture files…</button><button class="act" type="button" data-act="open-ratings">Ratings folder</button><button class="act" type="button" data-act="open-log">Log folder</button></div>');
+  menuEl.innerHTML = h.join('');
+}
+menuEl.addEventListener('change', (e) => { const k = e.target.dataset.k; if (k) slop.setSetting(k, e.target.checked); });
+menuEl.addEventListener('input', (e) => { const k = e.target.dataset.slider; if (!k) return; const v = Number(e.target.value); e.target.parentElement.querySelector('.val').textContent = `${v} px`; settings[k] = v; slop.setSetting(k, v); });
+menuEl.addEventListener('click', (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.k) slop.setSetting(t.dataset.k, JSON.parse(t.dataset.v));
+  else if (t.dataset.remove) slop.setSetting('offIn', (settings.offIn || []).filter((a) => a !== t.dataset.remove));
+  else if (t.dataset.act) { slop.action(t.dataset.act); closeMenu(); }
+});
+function closeMenu() { menuEl.hidden = true; gear.classList.remove('open'); slop.clickable(false); }
+gear.addEventListener('click', () => { if (menuEl.hidden) { paintMenu(); menuEl.hidden = false; gear.classList.add('open'); } else closeMenu(); });
+menuEl.addEventListener('mouseenter', () => slop.clickable(true));
+menuEl.addEventListener('mouseleave', () => slop.clickable(false));
 
 // ---- tray "Check picture files…": each file scored at full size and shrunk to a typical feed size
 slop.onCheckFiles(async (files) => {

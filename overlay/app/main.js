@@ -11,7 +11,7 @@ const MODEL = {
   url: 'https://huggingface.co/Vontra/detectra-v1/resolve/d8709d3c39aa69ab862748badce0d4a06e90bf4c/model.onnx',
   sha256: '1414b9aafaa01a644ed706224973f09b53a1388282104409862df9893b1b962b',
 };
-const DEFAULTS = { paused: false, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true, cpuLimit: 20, minScale: 1, offIn: [] };
+const DEFAULTS = { paused: false, blurPx: 2, strength: 'light', sensitivity: 'balanced', video: true, gameGuard: true, showScores: false, readText: true, ignoreWallpaper: true, cpuLimit: 20, minScale: 1, offIn: [] };
 let settings = { ...DEFAULTS }, win = null, tray = null, gameReason = null, gameClearSince = 0, gameWatcher = null;
 let status = { model: 'starting', engine: null, flagged: 0, tracked: 0, fps: 0, error: null };
 
@@ -89,6 +89,18 @@ ipcMain.on('clickable', (_e, on) => { if (win && !win.isDestroyed()) win.setIgno
 ipcMain.on('status', (_e, s) => setStatus(s));
 ipcMain.on('set-paused', (_e, v) => setSetting('paused', !!v));
 ipcMain.on('quit', () => quitFully());
+// ---- the gear menu
+const MENU_KEYS = { blurPx: 'px', video: 'bool', readText: 'bool', ignoreWallpaper: 'bool', gameGuard: 'bool', showScores: 'bool', sensitivity: ['sensitive', 'balanced', 'strict'], strength: ['light', 'medium', 'strong'], cpuLimit: [10, 20, 35, 0], offIn: 'list' };
+ipcMain.on('set-setting', (_e, k, v) => {
+  const t = MENU_KEYS[k]; if (!t) return;
+  if (t === 'px') { v = Number(v); if (!(v >= 0.5 && v <= 10)) return; } else if (t === 'bool') v = !!v; else if (t === 'list') { if (!Array.isArray(v)) return; v = v.map(String); } else if (!t.includes(v)) return;
+  setSetting(k, v);
+});
+ipcMain.on('action', (_e, name) => {
+  if (name === 'check-files') checkFiles();
+  else if (name === 'open-ratings') { fs.mkdirSync(ratingsDir(), { recursive: true }); shell.openPath(ratingsDir()); }
+  else if (name === 'open-log') shell.openPath(app.getPath('userData'));
+});
 // ---- feedback box: typing mode, saving, settings changes with undo
 let lastFg = '';
 ipcMain.handle('foreground-app', () => lastFg || null);
@@ -113,7 +125,7 @@ ipcMain.handle('apply-setting', (_e, action, direction, app) => {
   const SENS = ['strict', 'balanced', 'sensitive'], STR = ['light', 'medium', 'strong'];
   const step = (list, cur, d) => list[Math.max(0, Math.min(list.length - 1, list.indexOf(cur) + d))];
   if (action === 'sensitivity') setSetting('sensitivity', step(SENS, settings.sensitivity, direction === 'up' ? 1 : -1));
-  else if (action === 'strength') setSetting('strength', step(STR, settings.strength, direction === 'up' ? 1 : -1));
+  else if (action === 'strength') setSetting('blurPx', Math.round(Math.min(10, Math.max(0.5, (settings.blurPx || 2) * (direction === 'up' ? 1.5 : 1 / 1.5))) * 2) / 2);
   else if (action === 'ignore_small') setSetting('minScale', Math.min(3, (settings.minScale || 1) * 1.5));
   else if (action === 'app_off' && app) setSetting('offIn', [...new Set([...(settings.offIn || []), app])]);
   else return null;
@@ -121,7 +133,7 @@ ipcMain.handle('apply-setting', (_e, action, direction, app) => {
 });
 ipcMain.handle('undo-setting', (_e, token) => {
   const before = undos.get(token); if (!before) return false;
-  for (const k of ['sensitivity', 'strength', 'minScale', 'offIn']) if (JSON.stringify(settings[k]) !== JSON.stringify(before[k])) setSetting(k, before[k]);
+  for (const k of ['sensitivity', 'blurPx', 'minScale', 'offIn']) if (JSON.stringify(settings[k]) !== JSON.stringify(before[k])) setSetting(k, before[k]);
   undos.delete(token); return true;
 });
 
@@ -192,7 +204,7 @@ function buildMenu() {
     { label: status.model === 'ready' ? `Ready (${status.engine === 'webgpu' ? 'graphics card' : 'processor'}) · ${status.flagged} blurred on screen` : `Model: ${status.model}`, enabled: false },
     { type: 'separator' },
     { label: 'Pause  (Ctrl+Alt+B)', type: 'checkbox', checked: settings.paused, click: () => setSetting('paused', !settings.paused) },
-    { label: 'Blur strength', submenu: radio('strength', [['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']]) },
+    { label: `Blur amount (${settings.blurPx} px)`, submenu: [[1, 'Barely (1 px)'], [2, 'Slight (2 px)'], [4, 'Medium (4 px)'], [8, 'Strong (8 px)']].map(([v, l]) => ({ label: l, type: 'radio', checked: settings.blurPx === v, click: () => setSetting('blurPx', v) })) },
     { label: 'Sensitivity', submenu: radio('sensitivity', [['sensitive', 'Sensitive (flags at 50%)'], ['balanced', 'Balanced (65%)'], ['strict', 'Strict (80%)']]) },
     { label: 'Check videos', type: 'checkbox', checked: settings.video, click: () => setSetting('video', !settings.video) },
     { label: `CPU limit${status.cpu != null ? ` (now ${status.cpu}%)` : ''}`, submenu: [[10, '10%'], [20, '20%'], [35, '35%'], [0, 'No limit']].map(([v, l]) => ({ label: l, type: 'radio', checked: settings.cpuLimit === v, click: () => setSetting('cpuLimit', v) })) },

@@ -42,7 +42,7 @@ export function describe(a, app) {
     case 'similar': return a.verdict === 'ai' ? 'will blur pictures that look like this' : "won't blur pictures that look like this";
     case 'app_off': return app ? `turned off in ${app}` : 'noted (no app to turn off in)';
     case 'sensitivity': return a.direction === 'down' ? 'less sensitive: blurs only when surer' : 'more sensitive: blurs when less sure';
-    case 'strength': return a.direction === 'up' ? 'stronger blur' : 'lighter blur';
+    case 'strength': return a.direction === 'up' ? 'a bit more blur' : 'a bit less blur';
     case 'ignore_small': return 'ignores small pictures now';
     default: return 'saved as a note';
   }

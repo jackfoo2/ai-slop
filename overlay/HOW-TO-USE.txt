@@ -1,4 +1,4 @@
-AI Slop Overlay, v0.15.1
+AI Slop Overlay, v0.17
 Lightly blurs pictures and videos that look AI-generated, anywhere on your screen.
 
 NEEDS: Windows 10 (version 2004 or newer) or Windows 11, 64-bit.
@@ -10,7 +10,10 @@ START IT
    "More info", then "Run anyway". The desktop icon then points at this copy; use it from now on.
 
 CONTROLS
-- Top-left corner: "AI Slop  On  X". On / Off turns the blurring on and off. X stops the program completely.
+- Top-left corner: "AI Slop  On  ⚙  X". On / Off turns the blurring on and off. X stops the program completely.
+  ⚙ opens the settings: switches (videos, labels and watermarks, wallpaper, games, scores on every picture),
+  blur amount (a slider, 0.5 to 10 px; default 2 px: slightly soft, still easy to make out), sensitivity, CPU limit, the apps you've turned it off in (with "Turn back on"), and tools
+  (check picture files, ratings folder, log folder).
 - Opening it from the desktop icon while it's running just switches it back on.
 - Ctrl+Alt+B also turns it on and off.
 - Right-click the tray icon (bottom-right of the taskbar) for blur strength, sensitivity, videos,

@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('slop', {
   log: (...a) => ipcRenderer.send('log', ...a),
   rate: (meta, bytes) => ipcRenderer.send('rate', meta, bytes),
   rated: () => ipcRenderer.invoke('rated'),
+  setSetting: (k, v) => ipcRenderer.send('set-setting', k, v),
+  action: (name) => ipcRenderer.send('action', name),
   unrate: () => ipcRenderer.send('unrate'),
   feedbackMode: (on) => ipcRenderer.send('feedback-mode', on),
   feedback: (meta, bytes) => ipcRenderer.send('feedback', meta, bytes),

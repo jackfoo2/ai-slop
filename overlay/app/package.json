@@ -1,1 +1,1 @@
-{ "name": "ai-slop-overlay", "productName": "AI Slop Overlay", "version": "0.15.1", "description": "Lightly blurs likely-AI pictures and videos anywhere on your screen.", "main": "main.js", "license": "MIT" }
+{ "name": "ai-slop-overlay", "productName": "AI Slop Overlay", "version": "0.17.0", "description": "Lightly blurs likely-AI pictures and videos anywhere on your screen.", "main": "main.js", "license": "MIT" }

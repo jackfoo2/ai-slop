@@ -188,3 +188,20 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Tested here: the reader thread starts, requests tokenizer/config through slopmodels:, main tries the official repo
   (blocked in this workspace), and the sentence falls back to a note without errors. NOT tested: the model actually
   answering (needs the download, so Jack's PC is the first real run).
+
+## v0.16 (Jack: the top-left controls were gone; wants a settings gear with a pop-up menu)
+- Cause: the feedback box and its confirmation were styled display:flex, which overrode their "hidden" attribute,
+  so the empty feedback box sat over the corner bar. Fixed with [hidden] { display: none !important }.
+- Corner bar: AI Slop · On · ⚙ · ✕. The ⚙ panel: switches (videos, labels/watermarks, wallpaper, games, scores on
+  every picture), sensitivity, blur strength, CPU limit, apps it's turned off in (with "Turn back on"), and tools
+  (check picture files, ratings folder, log folder). Changes go through main (whitelisted keys and values).
+- Tested: bar on top again, feedback box hidden until "…", every menu control saved and highlighted, feedback box
+  test still passes.
+
+## v0.17 (Jack: the blur blocks the picture; it should be an indicator; between his sample levels 1 and 2)
+- Samples made from his group photo at feed size: 1.5 / 2.5 / 4 / 6 / 9 px (9 = the old Light at high confidence).
+- Blur is now a fixed amount from a slider (gear menu "Blur amount", 0.5-10 px, default 2 px), nudged only +-15% by
+  confidence. Tray presets 1/2/4/8 px. Feedback "blur more / too blurry" moves the slider by x1.5.
+- Drawn at full capture resolution from the live capture at the picture's current position (was drawn from the
+  reduced processing copy, which added softness on big or high-resolution screens).
+- Tested: folder page, 21 blurred, readable at 2 px; Task Manager test unchanged.
