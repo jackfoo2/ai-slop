@@ -302,3 +302,88 @@ function scoreShifts(cur, pts, lo, hi, k) {
   for (const c of scored) { if (picked.length >= k) break; if (picked.every((p) => Math.abs(p.dy - c.dy) >= 3)) picked.push(c); }
   return picked;
 }
+
+/**
+ * Panels inside one picture (collages: a grid of mugshots made into one image). Collages are almost always a regular
+ * grid, so this only accepts dividing lines at even spacing (halves, thirds, quarters, fifths) running all the way
+ * across: a thin divider strip (flat, with picture on both sides) or a sharp straight edge (panels butted together).
+ * Returns the grid cells as absolute rects, or [] for a single picture.
+ */
+export function findPanels(img, b, opt = {}) {
+  const { data, width: W } = img;
+  const L = (x, y) => { const q = (y * W + x) * 4; return (data[q] * 77 + data[q + 1] * 150 + data[q + 2] * 29) >> 8; };
+  const B = { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) };
+  // per line across rect r: how flat it is, how often it's a sharp jump, and how much it differs from the next line
+  function profile(r, vertical) {
+    const span = vertical ? r.w : r.h, len = vertical ? r.h : r.w, st = Math.max(1, Math.floor(len / 150));
+    const flat = new Float32Array(span).fill(99), edge = new Float32Array(span), diff = new Float32Array(span);
+    for (let i = 1; i < span - 1; i++) {
+      let s1 = 0, s2 = 0, n = 0, j = 0, ds = 0;
+      for (let t = 0; t < len; t += st) {
+        const x = vertical ? r.x + i : r.x + t, y = vertical ? r.y + t : r.y + i, v = L(x, y);
+        s1 += v; s2 += v * v; n++;
+        const a = vertical ? L(x - 1, y) : L(x, y - 1), c = vertical ? L(x + 1, y) : L(x, y + 1);
+        if (Math.abs(c - a) > 30) j++;
+        ds += Math.abs(c - v);
+      }
+      const m = s1 / n; flat[i] = Math.sqrt(Math.max(0, s2 / n - m * m)); edge[i] = j / n; diff[i] = ds / n;
+    }
+    return { flat, edge, diff, span };
+  }
+  // a dividing line at i: a thin flat strip with picture on both sides, or (picture on both sides) a sharp edge
+  function isLine(pr, i, strict) {
+    if (pr.flat[i] < 6) {
+      let a = i, z = i; while (a > 1 && pr.flat[a - 1] < 6) a--; while (z < pr.span - 2 && pr.flat[z + 1] < 6) z++;
+      if (z - a <= 14 && a > 2 && z < pr.span - 3 && pr.flat[a - 2] > 14 && pr.flat[z + 2] > 14) return true;
+    }
+    const busy = i > 7 && i < pr.span - 8 && pr.flat[i - 6] > 12 && pr.flat[i + 6] > 12;
+    if (!busy) return false;
+    if (pr.edge[i] >= (strict ? 0.75 : 0.6)) return true;
+    const around = []; for (let k = Math.max(1, i - 12); k <= Math.min(pr.span - 2, i + 12); k++) if (Math.abs(k - i) > 1) around.push(pr.diff[k]);
+    around.sort((p, q) => p - q);
+    const typical = around[Math.floor(around.length / 2)] || 0;
+    return pr.diff[i] >= (strict ? 10 : 8) && pr.diff[i] >= (strict ? 5 : 4) * Math.max(1, typical);
+  }
+  // evenly spaced lines (halves to fifths) all the way across: the test for "is this a collage at all"
+  function evenCount(pr) {
+    for (const n of [5, 4, 3, 2]) {
+      if (pr.span / n < (opt.minPart || 48)) continue;
+      const tol = Math.max(4, Math.round(pr.span * 0.025));
+      let ok = true;
+      for (let k = 1; k < n && ok; k++) { const p = Math.round((k * pr.span) / n); ok = false; for (let i = Math.max(2, p - tol); i <= Math.min(pr.span - 3, p + tol) && !ok; i++) ok = isLine(pr, i, false); }
+      if (ok) return n;
+    }
+    return 1;
+  }
+  // inside a known collage row or column: clear lines anywhere (panels can be uneven widths)
+  function freeCuts(pr, minPart) {
+    const cuts = []; let last = 0;
+    for (let i = minPart; i < pr.span - minPart; i++) if (i - last >= minPart && isLine(pr, i, true)) { cuts.push(i); last = i; i += 8; }
+    return cuts;
+  }
+  const pad = 3, cells = [];
+  const rows = evenCount(profile(B, false)), cols = evenCount(profile(B, true));
+  if (rows < 2 && cols < 2) return [];
+  // a regular grid only if every row splits at the same columns (a top row of 3 over rows of 4 is not one)
+  const regular = rows >= 2 && cols >= 2 && Array.from({ length: rows }, (_, r) => ({ x: B.x, y: B.y + Math.round((r * B.h) / rows), w: B.w, h: Math.round(((r + 1) * B.h) / rows) - Math.round((r * B.h) / rows) }))
+    .every((band) => evenCount(profile(band, true)) === cols);
+  if (regular) { // the exact cells
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const x0 = B.x + Math.round((c * B.w) / cols) + pad, x1 = B.x + Math.round(((c + 1) * B.w) / cols) - pad;
+      const y0 = B.y + Math.round((r * B.h) / rows) + pad, y1 = B.y + Math.round(((r + 1) * B.h) / rows) - pad;
+      cells.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    }
+  } else { // rows (or columns) only, panels of uneven size: overlapping squares along each row (or column)
+    const alongRows = rows >= 2, n = alongRows ? rows : cols;
+    for (let k = 0; k < n; k++) {
+      const a0 = Math.round((k * (alongRows ? B.h : B.w)) / n), a1 = Math.round(((k + 1) * (alongRows ? B.h : B.w)) / n);
+      const side = a1 - a0 - 2 * pad, len = alongRows ? B.w : B.h, step = Math.max(16, Math.round(side / 2));
+      for (let t = 0; t + side <= len + step / 2; t += step) {
+        const u = Math.min(t, len - side);
+        cells.push(alongRows ? { x: B.x + u, y: B.y + a0 + pad, w: side, h: side } : { x: B.x + a0 + pad, y: B.y + u, w: side, h: side });
+        if (u !== t) break;
+      }
+    }
+  }
+  return cells.length >= 2 ? cells.filter((c) => c.w >= 32 && c.h >= 32) : [];
+}

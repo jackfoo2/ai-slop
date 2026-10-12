@@ -1,7 +1,7 @@
 // AI Slop Overlay — the see-through page over the screen.
 // Each frame: capture the screen, keep boxes glued to pictures as things scroll, and draw a light
 // blur over the ones the model thinks are AI. A few times a second: look for new pictures.
-import { findRegions, grayDown, Tracker } from './core.js';
+import { findRegions, grayDown, Tracker, findPanels } from './core.js';
 import { startOcr, readText, matchAiText } from './ocr.js';
 import { readPhrases, cleanAction, describe } from './feedback.js';
 
@@ -408,8 +408,28 @@ function queueScore(b) {
   const x = Math.max(0, Math.round(b.x)), y = Math.max(0, Math.round(b.y));
   const w = Math.min(frame.width - x, Math.round(b.w)), h = Math.min(frame.height - y, Math.round(b.h));
   if (w < 32 || h < 32) { b.scoring = false; scoring--; return; }
+  // a collage (a grid of photos made into one picture): found once, then each panel is scored on its own too
+  if (b.panels === undefined && !b.dynamic) {
+    try { b.panels = findPanels(fctx.getImageData(0, 0, frame.width, frame.height), { x, y, w, h }).slice(0, 16).map((p) => ({ dx: p.x - b.x, dy: p.y - b.y, w: p.w, h: p.h })); }
+    catch { b.panels = []; }
+    if (b.panels.length) slop.log('collage', { panels: b.panels.length, size: [w, h] });
+  }
+  const scorePanels = async (whole) => {
+    if (!b.panels || !b.panels.length || b.dynamic) return whole;
+    let best = whole, parts = [];
+    for (const pn of b.panels) {
+      const px = Math.max(0, Math.round((b.x + pn.dx) / f)), py = Math.max(0, Math.round((b.y + pn.dy) / f));
+      const pw = Math.min(video.videoWidth - px, Math.round(pn.w / f)), ph = Math.min(video.videoHeight - py, Math.round(pn.h / f));
+      if (pw < 32 || ph < 32) continue;
+      const s = await engine.score(await createImageBitmap(video, px, py, pw, ph), 1);
+      parts.push(+s.toFixed(2)); if (s > best) best = s;
+    }
+    b.panelScores = parts;
+    return best; // the most AI-looking part decides: one AI face in a grid is enough
+  };
   createImageBitmap(video, Math.round(x / f), Math.round(y / f), Math.round(w / f), Math.round(h / f))
     .then((bmp) => engine.score(bmp, L().views))
+    .then(scorePanels)
     .then((p) => {
       b.history.push(p); if (b.history.length > 3) b.history.shift();
       b.p = b.history.reduce((a, c) => a + c, 0) / b.history.length;
@@ -434,8 +454,17 @@ const isBlurred = (b) => {
 // moves and how old the latest capture is, so the blur keeps up with scrolling between captures
 const xs = new Map(); // box id -> its ✕ button
 function uiEl(map, id, make, kind = '') { let el = map.get(id); if (el && el.dataset.kind !== kind) { el.remove(); el = null; } if (!el) { el = make(); el.dataset.kind = kind; chipsEl.appendChild(el); map.set(id, el); } return el; }
-function clickableEl(el) { el.addEventListener('mouseenter', () => slop.clickable(true)); el.addEventListener('mouseleave', () => slop.clickable(false)); return el; }
-function reveal(b) { b.revealed = true; const c = cache.get(b.sig); if (c) c.revealed = true; slop.clickable(false); }
+// ---- click-catching: the overlay passes every click through except while the mouse is on one of its own controls
+const mouse = { x: -1, y: -1 }; let catching = false;
+document.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; }, true);
+function setCatch(on) { if (on === catching) return; catching = on; slop.clickable(on); }
+const CONTROLS = '#bar, #menu:not([hidden]), #fb:not([hidden]), #toast:not([hidden]), .chip .lbl, .chip button, .x';
+function onControl() { if (mouse.x < 0) return false; const el = document.elementFromPoint(mouse.x, mouse.y); return !!(el && el.closest(CONTROLS)); }
+// watchdog: a control can vanish under the mouse (a tag after rating, a picture scrolling away, a message timing out);
+// the browser never says "mouse left" for something that's gone, so check where the mouse really is, 4 times a second
+setInterval(() => { if (catching && !onControl()) setCatch(false); }, 250);
+function clickableEl(el) { el.addEventListener('mouseenter', () => setCatch(true)); el.addEventListener('mouseleave', () => setCatch(onControl())); return el; }
+function reveal(b) { b.revealed = true; const c = cache.get(b.sig); if (c) c.revealed = true; setCatch(false); }
 
 // ---- ratings: + (it got it right) and − (it got it wrong) on every tag
 let ratedList = []; // { a: shape, v: 36 brightness values, verdict } from your ratings (kept across restarts)
@@ -465,7 +494,7 @@ function rate(b, right, chip) {
   if (b.fp) { ratedList = ratedList.filter((e) => !(Math.abs(e.a - b.fp.a) <= 0.06 && e.v.every((x, i) => Math.abs(x - b.fp.v[i]) < 6))); ratedList.push({ ...b.fp, verdict: b.user }); }
   chip.querySelector('.lbl').textContent = right ? 'Thanks · noted' : isAI ? 'Got it · marked AI, blurred' : 'Got it · marked real, unblurred';
   chip.dataset.flash = String(performance.now() + 1800);
-  slop.clickable(false);
+  setCatch(false);
   // a small copy of the picture and its scores, saved on this PC only
   const VW = video.videoWidth, VH = video.videoHeight, X = (v) => Math.round(v / f);
   const x = Math.max(0, X(b.x)), y = Math.max(0, X(b.y)), w = Math.min(VW - x, X(b.w)), h = Math.min(VH - y, X(b.h));
@@ -547,7 +576,7 @@ window.__wallCheck = () => {
 };
 window.__slopDrawn = () => drawn.map((r) => r.map((v) => +(v / k).toFixed(1)));
 window.__ratedDebug = () => { const img = fctx.getImageData(0, 0, frame.width, frame.height); return tracker.boxes.map((b) => { const fp = fingerprint(img, b); return { x: Math.round(b.x), y: Math.round(b.y), user: b.user || null, a: fp.a, d: ratedList.map((e) => (e.v && e.v.length === fp.v.length ? +(e.v.reduce((t, x, i) => t + Math.abs(x - fp.v[i]), 0) / fp.v.length).toFixed(2) : 'len' + (e.v ? e.v.length : 0)) + '/' + e.verdict + '/a' + e.a) }; }); };
-window.__slopUI = () => ({ ocrAvgMs: ocrN ? Math.round(ocrMs / ocrN) : null, texts: tracker.boxes.map((b) => ({ y: Math.round(b.y / k), done: !!b.ocrDone, hit: b.textHit, blurred: isBlurred(b) })), chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
+window.__slopUI = () => ({ catching, ocrAvgMs: ocrN ? Math.round(ocrMs / ocrN) : null, texts: tracker.boxes.map((b) => ({ y: Math.round(b.y / k), done: !!b.ocrDone, hit: b.textHit, blurred: isBlurred(b) })), chips: [...chipsEl.querySelectorAll('.chip')].map((c) => c.textContent), xs: chipsEl.querySelectorAll('.x').length });
 window.__slopState = () => ({ scoringNow: scoring, level, processed, idle, skipped, scrollAcc, departed: departed.length, paused: settings.paused, k, fps: lastFps, engine: engine?.name, boxes: tracker.boxes.map((b) => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), p: b.p, blurred: isBlurred(b), covered: !!b.covered, cellsOn: b.cells ? b.cells.reduce((a, c) => a + c, 0) : null, dynamic: !!b.dynamic, miss: b.miss || 0, lost: b.lost || 0, isScoring: !!b.scoring, nextIn: b.nextScore ? Math.round(b.nextScore - performance.now()) : null, hist: (b.history || []).map((v) => +v.toFixed(2)) })) });
 // ---- the control bar (top-left): on/off and close
 const bar = document.getElementById('bar');
@@ -556,8 +585,8 @@ function paintBar() {
   bar.querySelector('#onoff').textContent = on ? 'On' : 'Off';
   bar.classList.toggle('off', !on);
 }
-bar.addEventListener('mouseenter', () => slop.clickable(true));
-bar.addEventListener('mouseleave', () => slop.clickable(false));
+bar.addEventListener('mouseenter', () => setCatch(true));
+bar.addEventListener('mouseleave', () => setCatch(onControl()));
 bar.querySelector('#onoff').addEventListener('click', () => { slop.setPaused(!settings.paused); });
 bar.querySelector('#close').addEventListener('click', () => slop.quit());
 slop.onSettings((s) => { settings = s; paintBar(); if (!menuEl.hidden && !menuEl.contains(document.activeElement)) paintMenu(); });
@@ -595,10 +624,18 @@ menuEl.addEventListener('click', (e) => {
   else if (t.dataset.remove) slop.setSetting('offIn', (settings.offIn || []).filter((a) => a !== t.dataset.remove));
   else if (t.dataset.act) { slop.action(t.dataset.act); closeMenu(); }
 });
-function closeMenu() { menuEl.hidden = true; gear.classList.remove('open'); slop.clickable(false); }
-gear.addEventListener('click', () => { if (menuEl.hidden) { paintMenu(); menuEl.hidden = false; gear.classList.add('open'); } else closeMenu(); });
-menuEl.addEventListener('mouseenter', () => slop.clickable(true));
-menuEl.addEventListener('mouseleave', () => slop.clickable(false));
+function closeMenu() { menuEl.hidden = true; gear.classList.remove('open'); setCatch(false); }
+function toggleMenu(how) {
+  try {
+    if (menuEl.hidden) { paintMenu(); menuEl.hidden = false; gear.classList.add('open'); setCatch(true); slop.log('menu opened', how); }
+    else closeMenu();
+  } catch (e) { slop.log('menu error', String(e?.stack || e)); }
+}
+// open on the press itself: if click-catching flips between press and release, a full "click" never happens
+gear.addEventListener('pointerdown', (e) => { e.preventDefault(); toggleMenu('gear'); });
+slop.onOpenMenu(() => { if (menuEl.hidden) toggleMenu('tray'); });
+menuEl.addEventListener('mouseenter', () => setCatch(true));
+menuEl.addEventListener('mouseleave', () => setCatch(onControl()));
 
 // ---- tray "Check picture files…": each file scored at full size and shrunk to a typical feed size
 slop.onCheckFiles(async (files) => {
@@ -623,11 +660,15 @@ function openFeedback(b, chip) {
   const r = chip.getBoundingClientRect();
   fb.style.left = `${Math.min(window.innerWidth - 380, Math.max(6, r.left))}px`; fb.style.top = `${Math.min(window.innerHeight - 90, r.bottom + 6)}px`;
   fb.hidden = false; fbIn.value = '';
-  slop.feedbackMode(true); // the overlay can take typing while the box is open
+  slop.feedbackMode(true); // the overlay can take typing while the box is open (clicks elsewhere still go through)
   setTimeout(() => fbIn.focus(), 60);
 }
 function closeFeedback() { fb.hidden = true; fbBox = null; slop.feedbackMode(false); }
 document.getElementById('fbCancel').addEventListener('click', closeFeedback);
+clickableEl(fb);
+// clicking anywhere else moves focus to that window: close the box then
+fbIn.addEventListener('blur', () => setTimeout(() => { if (!fb.hidden && !fb.contains(document.activeElement) && document.activeElement !== fbIn) closeFeedback(); }, 150));
+window.addEventListener('blur', () => { if (!fb.hidden) setTimeout(() => { if (!document.hasFocus()) closeFeedback(); }, 150); });
 fbIn.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFeedback(); if (e.key === 'Enter') sendFeedback(); });
 document.getElementById('fbSend').addEventListener('click', sendFeedback);
 async function sendFeedback() {
@@ -684,9 +725,14 @@ let toastTimer = 0;
 function showToast(msg, undo, ms = 8000) {
   toast.querySelector('.msg').textContent = msg;
   const u = toast.querySelector('.undo'); u.hidden = !undo;
-  u.onclick = () => { if (undo) undo(); toast.querySelector('.msg').textContent = 'Undone'; u.hidden = true; slop.clickable(false); clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 2500); };
-  toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; slop.clickable(false); }, ms);
+  u.onclick = () => { if (undo) undo(); toast.querySelector('.msg').textContent = 'Undone'; u.hidden = true; setCatch(false); clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 2500); };
+  toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; setCatch(false); }, ms);
 }
 clickableEl(toast);
+
+// anything that goes wrong inside the overlay goes into the log
+window.addEventListener('error', (e) => slop.log('overlay error', String(e.error?.stack || e.message)));
+window.addEventListener('unhandledrejection', (e) => slop.log('overlay error', String(e.reason?.stack || e.reason)));
+bar.addEventListener('pointerdown', (e) => slop.log('bar pressed', e.target.id || e.target.className || e.target.tagName, 'catching', catching));
 
 start().then(paintBar);

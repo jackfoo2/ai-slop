@@ -205,3 +205,40 @@ detector as the AI Slop Detector extension (Detectra v3, MIT), and draws a light
 - Drawn at full capture resolution from the live capture at the picture's current position (was drawn from the
   reduced processing copy, which added softness on big or high-resolution screens).
 - Tested: folder page, 21 blurred, readable at 2 px; Task Manager test unchanged.
+
+## v0.18 (Jack: collages, e.g. a grid of mugshots made into one picture, are a problem)
+- A collage was scored as one squeezed image (each face ~100 px in the detector's input). Now, on a picture's first
+  scoring, findPanels (core.js) checks whether it's a collage: dividing lines at even spacing (halves to fifths) all
+  the way across, either a thin divider strip with picture on both sides or a sharp edge with picture on both sides.
+  Regular grid (every row splits at the same columns): the exact cells. Rows only (or columns only), uneven panels
+  like Jack's 3-over-4-over-4 mugshot collage: overlapping face-sized squares along each row. Up to 16 parts, each
+  scored from the full-quality capture; the most AI-looking part decides.
+- Tests: 8-panel collages with white dividers, black dividers, butted: all split; Jack's mugshot collage: 15 squares
+  over its 3 rows; 7 single photos incl. his group photo: none split. Synthetic cut-outs, a meme and a text screenshot
+  still get extra squares (more looks at a single picture; small extra false-alarm risk).
+- End to end (dark mode page, so white dividers are part of the picture): collage with one "AI" panel among 7 "real"
+  scored 0.98 and blurred; all-"real" collage 0.12, clear.
+- Note: collages whose dividers match the page background (white dividers on a white post) were already split into
+  separate pictures by the page picture-finder since v0.7.
+
+## v0.19 (Jack: CPU stays under 20%; short freezes where the mouse moves but can't click anything)
+- Cause: the overlay catches clicks only while the mouse is on one of its controls (mouseenter -> catch,
+  mouseleave -> release). When a control vanished under the mouse (a tag after rating, a picture scrolling away, a
+  message timing out) no mouseleave fires, so it kept catching clicks: an invisible pane over the whole screen. Also
+  the feedback box caught every click on the screen while it was open.
+- Now: one switch (setCatch) plus a watchdog 4x a second that checks what's really under the mouse and releases
+  clicks when it isn't an overlay control. The feedback box no longer blocks the screen: clicks elsewhere go
+  through, and losing focus closes it.
+- Tested: mouse on a tag's - button, click (tag disappears): released within a quarter second; feedback box open:
+  clicks elsewhere pass; focus elsewhere: box closes.
+- Jack's results: CPU limit holds under 20% on his PC; bigger pictures raised his all-AI folder hit rate from ~55%
+  to ~85%; many remaining misses are AI-edited real photos (person removed), which he decided are fine to let through
+  (target: pictures 80%+ AI-made).
+
+## v0.20 (Jack: clicking the gear icon opens nothing)
+- Couldn't reproduce here (Linux can't do Windows' pass-clicks-through-while-watching-the-mouse mode), so covering
+  the likely causes: the gear now opens on the press itself (a flip of click-catching between press and release
+  swallows a full "click"); the menu sits flush under the bar (no gap that switches catching off on the way down);
+  the tray has "Settings…" as a second way in; the log records bar presses (with the catching state), menu opens,
+  and any error inside the overlay.
+- If it still fails on Jack's PC: overlay-log.txt lines "bar pressed …" / "menu opened …" / "overlay error …".

@@ -106,7 +106,8 @@ let lastFg = '';
 ipcMain.handle('foreground-app', () => lastFg || null);
 ipcMain.on('feedback-mode', (_e, on) => {
   if (!win || win.isDestroyed()) return;
-  if (on) { win.setIgnoreMouseEvents(false); win.setFocusable(true); win.focus(); }
+  // typing needs the overlay focusable; clicks still pass through except over the box itself (handled like any control)
+  if (on) { win.setFocusable(true); win.focus(); }
   else { win.setFocusable(false); win.setIgnoreMouseEvents(true, { forward: true }); }
 });
 ipcMain.on('feedback', (_e, meta, bytes) => {
@@ -215,6 +216,7 @@ function buildMenu() {
     { type: 'separator' },
     { label: `Your ratings: ${ratings.n}${ratings.n ? ` (right ${ratings.right}, wrong ${ratings.n - ratings.right})` : ''}`, enabled: false },
     { label: 'Open ratings folder', click: () => { fs.mkdirSync(ratingsDir(), { recursive: true }); shell.openPath(ratingsDir()); } },
+    { label: 'Settings…', click: () => { if (win && !win.isDestroyed()) win.webContents.send('open-menu'); } },
     { label: 'Check picture files…', click: () => checkFiles() },
     { label: 'Open log folder', click: () => shell.openPath(app.getPath('userData')) },
     { label: 'Quit', click: () => quitFully() },
