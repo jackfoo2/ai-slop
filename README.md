@@ -86,5 +86,6 @@ model, ocr.js reads labels, feedback.js handles your ratings and sentences).
 
 ## License
 
-Everything else: © 2026 Jack Hagman. All rights reserved (see [`LICENSE`](LICENSE)). The code is published to read,
-not licensed for reuse; the third-party parts keep their own licenses.
+**MIT** (see [`LICENSE`](LICENSE)): free to use, change, share or build on, including commercially. This is a side
+project with no plans to market or sell it, so anyone who wants to pick it up and carry it further is welcome to.
+The third-party parts keep their own licenses (listed in `LICENSE`).
